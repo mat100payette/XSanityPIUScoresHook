@@ -34,6 +34,40 @@ int text_height(HWND window, HFONT font, std::wstring_view label, int width) {
     return rect.bottom;
 }
 
+class RedrawBatch {
+    HWND window_;
+    std::vector<HWND> visible_;
+
+public:
+    explicit RedrawBatch(HWND window) : window_(window) {
+        auto remember = [&](HWND control) {
+            if (GetWindowLongPtrW(control, GWL_STYLE) & WS_VISIBLE) {
+                visible_.push_back(control);
+            }
+        };
+        remember(window);
+        for (HWND child = GetWindow(window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+            remember(child);
+        }
+
+        for (auto control : visible_) {
+            SendMessageW(control, WM_SETREDRAW, FALSE, 0);
+        }
+    }
+
+    ~RedrawBatch() {
+        // Restore children before their parent; never reveal a window that was hidden.
+        for (auto it = visible_.rbegin(); it != visible_.rend(); ++it) {
+            SendMessageW(*it, WM_SETREDRAW, TRUE, 0);
+        }
+
+        RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    }
+
+    RedrawBatch(const RedrawBatch&) = delete;
+    RedrawBatch& operator=(const RedrawBatch&) = delete;
+};
+
 void enable_control(HWND window, int id, bool enabled) {
     auto control = GetDlgItem(window, id);
     if ((IsWindowEnabled(control) != FALSE) != enabled) {
@@ -661,8 +695,9 @@ std::optional<INT_PTR> SetupView::message(UINT message, WPARAM wparam, LPARAM lp
             id == IDC_INTRO || id == IDC_COMPONENTS || id == IDC_DETAILS || !IsWindowEnabled(control);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, failed_ && id == IDC_STATUS ? theme_.danger : (muted ? theme_.muted : theme_.text));
-        SetBkColor(dc, id == IDC_ROOT ? theme_.panel : theme_.background);
-        return reinterpret_cast<INT_PTR>(id == IDC_ROOT && IsWindowEnabled(control) ? panel_ : background_);
+        bool input = id == IDC_ROOT && IsWindowEnabled(control);
+        SetBkColor(dc, input ? theme_.panel : theme_.background);
+        return reinterpret_cast<INT_PTR>(input ? panel_ : background_);
     }
 
     if (message == WM_THEMECHANGED || message == WM_SETTINGCHANGE || message == WM_SYSCOLORCHANGE) {
@@ -727,15 +762,37 @@ void SetupView::refresh(bool installed, bool discards_pending) {
     bool keep = IsDlgButtonChecked(window_, IDC_SYNC) == BST_CHECKED ||
                 IsDlgButtonChecked(window_, IDC_OVERLAY) == BST_CHECKED;
     bool relayout = completed_;
-    working_ = completed_ = failed_ = false;
-    removing_ = !keep && installed;
-    progress_value_ = 0;
-    for (int id : {IDC_SYNC, IDC_OVERLAY, IDCANCEL}) {
-        enable_control(window_, id, true);
-    }
+    {
+        RedrawBatch batch(window_);
+        working_ = completed_ = failed_ = false;
+        removing_ = !keep && installed;
+        progress_value_ = 0;
+        for (int id : {IDC_SYNC, IDC_OVERLAY, IDCANCEL}) {
+            enable_control(window_, id, true);
+        }
 
-    for (int id : {IDC_ROOT, IDC_BROWSE, IDC_LAUNCH}) {
-        enable_control(window_, id, keep);
+        for (int id : {IDC_ROOT, IDC_BROWSE, IDC_LAUNCH}) {
+            enable_control(window_, id, keep);
+        }
+
+        set_caption(window_,
+            IDC_INTRO,
+            installed ? L"Add, change or remove your installed components."
+                      : L"Your personal bests, connected to PIU Scores.");
+        set_caption(
+            window_, IDC_APPLY, keep ? (installed ? L"&Apply changes" : L"&Install") : L"&Remove all");
+        enable_control(window_, IDC_APPLY, keep || installed);
+        set_caption(window_,
+            IDC_STATUS,
+            removing_ ? L"Ready to remove" : (installed ? L"Ready to apply changes" : L"Ready to install"));
+        set_caption(window_,
+            IDC_DETAILS,
+            !keep
+                ? (installed ? L"Both components and your saved account data will be removed."
+                             : L"Choose at least one component to continue.")
+                : (discards_pending ? L"Removing PB syncing discards pending uploads. Your account settings "
+                                      L"stay with the overlay."
+                                    : L"You can add or remove either component anytime by reopening setup."));
     }
 
     auto cancel = GetDlgItem(window_, IDCANCEL);
@@ -743,27 +800,8 @@ void SetupView::refresh(bool installed, bool discards_pending) {
         ShowWindow(cancel, SW_SHOW);
     }
 
-    set_caption(window_,
-        IDC_INTRO,
-        installed ? L"Add, change or remove your installed components."
-                  : L"Your personal bests, connected to PIU Scores.");
-    set_caption(window_, IDC_APPLY, keep ? (installed ? L"&Apply changes" : L"&Install") : L"&Remove all");
-    enable_control(window_, IDC_APPLY, keep || installed);
-    set_caption(window_,
-        IDC_STATUS,
-        removing_ ? L"Ready to remove" : (installed ? L"Ready to apply changes" : L"Ready to install"));
-    set_caption(window_,
-        IDC_DETAILS,
-        !keep ? (installed ? L"Both components and your saved account data will be removed."
-                           : L"Choose at least one component to continue.")
-              : (discards_pending ? L"Removing PB syncing discards pending uploads. Your account settings "
-                                    L"stay with the overlay."
-                                  : L"You can add or remove either component anytime by reopening setup."));
     if (relayout) {
         layout();
-    } else {
-        InvalidateRect(window_, nullptr, FALSE);
-        InvalidateRect(GetDlgItem(window_, IDC_APPLY), nullptr, FALSE);
     }
 }
 

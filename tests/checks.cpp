@@ -1238,6 +1238,7 @@ struct Preview {
     HWND window = nullptr;
     SetupAppearance appearance;
     UINT dpi;
+    bool installed = false;
     std::string error;
 
     explicit Preview(SetupAppearance style, UINT scale = 96) : appearance(style), dpi(scale) {
@@ -1266,6 +1267,12 @@ struct Preview {
                 if (preview) {
                     if (auto result = preview->view.message(message, wparam, lparam)) {
                         return *result;
+                    }
+
+                    if (message == WM_COMMAND && HIWORD(wparam) == BN_CLICKED &&
+                        (LOWORD(wparam) == IDC_SYNC || LOWORD(wparam) == IDC_OVERLAY)) {
+                        preview->view.refresh(preview->installed);
+                        return TRUE;
                     }
                 }
 
@@ -1357,6 +1364,92 @@ struct Preview {
     }
 };
 
+void view_removal_transition_checks() {
+    struct RedrawAudit {
+        bool paused = false;
+        int changes = 0, intermediate = 0;
+
+        static LRESULT CALLBACK observe(
+            HWND control, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data) {
+            auto audit = reinterpret_cast<RedrawAudit*>(data);
+            if (message == WM_SETREDRAW) {
+                audit->paused = !wparam;
+            } else if (message == WM_ENABLE || message == WM_SETTEXT) {
+                ++audit->changes;
+                if (!audit->paused) {
+                    ++audit->intermediate;
+                }
+            }
+
+            return DefSubclassProc(control, message, wparam, lparam);
+        }
+    };
+
+    for (auto appearance : {SetupAppearance::Dark, SetupAppearance::Light, SetupAppearance::Contrast}) {
+        for (bool installed : {false, true}) {
+            Preview preview(appearance);
+            preview.installed = installed;
+            preview.view.refresh(installed);
+            auto dialog = preview.window;
+            constexpr std::array<int, 5> Controls{IDC_ROOT, IDC_BROWSE, IDC_APPLY, IDC_STATUS, IDC_DETAILS};
+            std::array<RedrawAudit, Controls.size()> audits;
+            for (size_t index = 0; index < Controls.size(); ++index) {
+                check(SetWindowSubclass(GetDlgItem(dialog, Controls[index]),
+                          RedrawAudit::observe,
+                          3,
+                          reinterpret_cast<DWORD_PTR>(&audits[index])) != FALSE,
+                    "observe native redraw state during component transitions");
+            }
+
+            auto field = GetDlgItem(dialog, IDC_ROOT);
+            auto dc = GetDC(field);
+            for (bool keep : {false, true, false, true}) {
+                SendDlgItemMessageW(dialog, IDC_SYNC, BM_CLICK, 0, 0);
+                check(control_text(dialog, IDC_APPLY) ==
+                              (keep ? (installed ? L"&Apply changes" : L"&Install") : L"&Remove all") &&
+                          (IsWindowEnabled(GetDlgItem(dialog, IDC_APPLY)) != FALSE) == (keep || installed),
+                    "real checkbox notifications update removal caption and action availability");
+                check((IsWindowEnabled(field) != FALSE) == keep &&
+                          (IsWindowEnabled(GetDlgItem(dialog, IDC_BROWSE)) != FALSE) == keep &&
+                          (IsWindowEnabled(GetDlgItem(dialog, IDC_LAUNCH)) != FALSE) == keep,
+                    "entering and leaving removal updates all folder and launch controls");
+
+                auto brush = reinterpret_cast<HBRUSH>(SendMessageW(dialog,
+                    keep ? WM_CTLCOLOREDIT : WM_CTLCOLORSTATIC,
+                    reinterpret_cast<WPARAM>(dc),
+                    reinterpret_cast<LPARAM>(field)));
+                LOGBRUSH background{};
+                GetObjectW(brush, sizeof(background), &background);
+                check(GetBkColor(dc) == background.lbColor,
+                    "enabled and disabled folder text uses the same background as its returned brush");
+            }
+
+            bool batched = true;
+            int changes = 0;
+            for (size_t index = 0; index < Controls.size(); ++index) {
+                auto control = GetDlgItem(dialog, Controls[index]);
+                batched &= !audits[index].paused && audits[index].intermediate == 0 &&
+                           (GetWindowLongPtrW(control, GWL_STYLE) & WS_VISIBLE) != 0;
+                changes += audits[index].changes;
+                RemoveWindowSubclass(control, RedrawAudit::observe, 3);
+            }
+
+            check(changes >= 12 && batched,
+                "removal transitions suppress intermediate native redraws and restore every child");
+            check((GetWindowLongPtrW(dialog, GWL_STYLE) & WS_VISIBLE) == 0 &&
+                      (GetWindowLongPtrW(dialog, GWL_EXSTYLE) & WS_EX_COMPOSITED) != 0,
+                "batched composited updates do not reveal a hidden installer preview");
+            ReleaseDC(field, dc);
+            if (!installed && appearance == SetupAppearance::Dark) {
+                SendDlgItemMessageW(dialog, IDC_SYNC, BM_CLICK, 0, 0);
+                preview.save(executable().parent_path() / L"setup-none-client.png", true);
+                SendDlgItemMessageW(dialog, IDC_SYNC, BM_CLICK, 0, 0);
+                preview.save(executable().parent_path() / L"setup-restored-client.png", true);
+            }
+        }
+    }
+}
+
 void view_repaint_checks() {
     struct Messages {
         int layouts = 0, enables = 0;
@@ -1439,6 +1532,7 @@ void view_repaint_checks() {
 }
 
 void view_checks() {
+    view_removal_transition_checks();
     view_repaint_checks();
     Preview preview(SetupAppearance::Dark);
     auto dialog = preview.window;
@@ -1753,6 +1847,12 @@ int wmain(int argc, wchar_t** argv) {
 
         if (argc == 3 && std::wstring_view(argv[1]) == L"--ipc-companion") {
             return ipc_companion(argv[2]);
+        }
+
+        if (argc == 2 && std::wstring_view(argv[1]) == L"--ui") {
+            view_checks();
+            std::cout << passed << " installer UI checks passed.\n";
+            return 0;
         }
 
         icon_checks();
