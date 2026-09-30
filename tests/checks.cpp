@@ -440,6 +440,61 @@ struct FakeHost : InstallHost {
     }
 };
 
+void installer_worker_checks() {
+    Fixture fixture("installer-worker");
+    auto game = fixture.game();
+    InstallPaths paths{fixture.root / L"app", fixture.root / L"state", fixture.root / L"menu"};
+    FakeHost host;
+    Installer installer(paths, host, GameHook{}, "app", "setup", "license");
+
+    // Match the real dialog: its UI thread owns the window mutex while a worker applies changes.
+    Handle window_mutex(CreateMutexW(nullptr, TRUE, SetupWindowMutex));
+    if (!window_mutex.get()) {
+        fail("Create setup window test mutex");
+    }
+
+    bool created = GetLastError() != ERROR_ALREADY_EXISTS;
+    DWORD acquired = created ? WAIT_OBJECT_0 : WaitForSingleObject(window_mutex.get(), 0);
+    if (acquired == WAIT_FAILED) {
+        fail("Acquire setup window test mutex");
+    }
+
+    // An open setup window may already own this mutex; either owner must allow the worker to run.
+    bool owned = acquired == WAIT_OBJECT_0 || acquired == WAIT_ABANDONED;
+    std::exception_ptr worker_error;
+    std::thread worker([&] {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            try {
+                installer.apply({game, true, false});
+                check(installer.installed() && installer.selection().sync,
+                    "setup worker installs while the window mutex is held");
+                installer.apply({game, false, true});
+                auto selection = installer.selection();
+                check(!selection.sync && selection.overlay,
+                    "setup worker changes components while the window mutex is held");
+                installer.apply({game, false, false});
+                check(!installer.installed() && !fs::exists(GameHook::layer(game)),
+                    "setup worker removes all components while the window mutex is held");
+            } catch (...) {
+                worker_error = std::current_exception();
+            }
+
+            winrt::uninit_apartment();
+        } catch (...) {
+            worker_error = std::current_exception();
+        }
+    });
+    worker.join();
+    if (owned) {
+        ReleaseMutex(window_mutex.get());
+    }
+
+    if (worker_error) {
+        std::rethrow_exception(worker_error);
+    }
+}
+
 void installer_checks() {
     Fixture fixture("installer");
     auto game = fixture.game();
@@ -1859,6 +1914,7 @@ int wmain(int argc, wchar_t** argv) {
         engine_checks();
         api_checks();
         installer_checks();
+        installer_worker_checks();
         hook_upgrade_checks();
         overlay_checks();
         ipc_checks();

@@ -3,6 +3,10 @@
 #include "model.h"
 
 namespace piu {
+// The dialog and its worker have independent lifetimes and must never share a mutex.
+inline constexpr wchar_t SetupWindowMutex[] = L"Local\\XSanityPIUScoresHook.Setup.Window";
+inline constexpr wchar_t SetupOperationMutex[] = L"Local\\XSanityPIUScoresHook.Setup.Operation";
+
 struct InstallPaths {
     fs::path app, state, menu;
     static InstallPaths user();

@@ -257,7 +257,7 @@ int run_setup(const std::vector<std::wstring>& args) {
     }
 
     // One installer at a time, including installed maintenance copies.
-    Handle mutex(CreateMutexW(nullptr, TRUE, L"Local\\XSanityPIUScoresHook.Setup"));
+    Handle mutex(CreateMutexW(nullptr, TRUE, SetupWindowMutex));
     if (!mutex.get()) {
         fail("Start setup");
     }

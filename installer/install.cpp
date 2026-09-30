@@ -14,13 +14,17 @@ class SetupLock {
     Handle mutex_;
 
 public:
-    SetupLock() : mutex_(CreateMutexW(nullptr, FALSE, L"Local\\XSanityPIUScoresHook.Setup")) {
+    SetupLock() : mutex_(CreateMutexW(nullptr, FALSE, SetupOperationMutex)) {
         if (!mutex_.get()) {
             fail("Lock companion setup");
         }
 
         DWORD result = WaitForSingleObject(mutex_.get(), 0);
-        if (result != WAIT_OBJECT_0 && result != WAIT_ABANDONED) {
+        if (result == WAIT_FAILED) {
+            fail("Lock companion setup");
+        }
+
+        if (result == WAIT_TIMEOUT) {
             throw Error("Another setup operation is running. Let it finish before trying again.");
         }
     }
