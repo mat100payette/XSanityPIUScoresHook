@@ -1505,6 +1505,69 @@ void view_removal_transition_checks() {
     }
 }
 
+void view_input_visibility_checks() {
+    struct VisibilityAudit {
+        HWND dialog;
+        int observations = 0;
+        bool visible = true;
+
+        static LRESULT CALLBACK observe(
+            HWND window, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data) {
+            auto audit = reinterpret_cast<VisibilityAudit*>(data);
+            auto result = DefSubclassProc(window, message, wparam, lparam);
+            if (message == WM_SETREDRAW || message == WM_ENABLE || message == WM_SETTEXT) {
+                ++audit->observations;
+                audit->visible &= IsWindowVisible(audit->dialog) != FALSE;
+            }
+
+            return result;
+        }
+    };
+
+    for (auto appearance : {SetupAppearance::Dark, SetupAppearance::Light, SetupAppearance::Contrast}) {
+        Preview preview(appearance);
+        auto dialog = preview.window;
+        // Exercise a visible window without moving the user's pointer or covering their desktop.
+        SetWindowPos(dialog,
+            nullptr,
+            GetSystemMetrics(SM_XVIRTUALSCREEN) - 5000,
+            GetSystemMetrics(SM_YVIRTUALSCREEN) - 5000,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(dialog, SW_SHOWNOACTIVATE);
+        check(IsWindowVisible(dialog) != FALSE, "input regression uses a visible installer");
+
+        VisibilityAudit audit{dialog};
+        std::vector<HWND> windows{dialog};
+        for (HWND child = GetWindow(dialog, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+            windows.push_back(child);
+        }
+
+        for (auto window : windows) {
+            if (!SetWindowSubclass(
+                    window, VisibilityAudit::observe, 4, reinterpret_cast<DWORD_PTR>(&audit))) {
+                fail("Observe setup input visibility");
+            }
+        }
+
+        for (bool installed : {false, true}) {
+            preview.installed = installed;
+            // Include ordinary toggles and repeated transitions into and out of Remove all.
+            for (int id : {IDC_OVERLAY, IDC_SYNC, IDC_OVERLAY, IDC_SYNC, IDC_SYNC, IDC_SYNC}) {
+                SendDlgItemMessageW(dialog, id, BM_CLICK, 0, 0);
+            }
+        }
+
+        for (auto window : windows) {
+            RemoveWindowSubclass(window, VisibilityAudit::observe, 4);
+        }
+
+        check(audit.observations > 0 && audit.visible && IsWindowVisible(dialog),
+            "installer stays visible to input throughout checkbox redraws, including Remove all");
+    }
+}
+
 void view_repaint_checks() {
     struct Messages {
         int layouts = 0, enables = 0;
@@ -1587,6 +1650,7 @@ void view_repaint_checks() {
 }
 
 void view_checks() {
+    view_input_visibility_checks();
     view_removal_transition_checks();
     view_repaint_checks();
     Preview preview(SetupAppearance::Dark);

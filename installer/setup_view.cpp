@@ -34,20 +34,17 @@ int text_height(HWND window, HFONT font, std::wstring_view label, int width) {
     return rect.bottom;
 }
 
-class RedrawBatch {
+class ChildRedrawBatch {
     HWND window_;
     std::vector<HWND> visible_;
 
 public:
-    explicit RedrawBatch(HWND window) : window_(window) {
-        auto remember = [&](HWND control) {
-            if (GetWindowLongPtrW(control, GWL_STYLE) & WS_VISIBLE) {
-                visible_.push_back(control);
-            }
-        };
-        remember(window);
+    explicit ChildRedrawBatch(HWND window) : window_(window) {
+        // WM_SETREDRAW clears WS_VISIBLE. Keep the dialog visible so input cannot reach windows behind it.
         for (HWND child = GetWindow(window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
-            remember(child);
+            if (GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE) {
+                visible_.push_back(child);
+            }
         }
 
         for (auto control : visible_) {
@@ -55,8 +52,8 @@ public:
         }
     }
 
-    ~RedrawBatch() {
-        // Restore children before their parent; never reveal a window that was hidden.
+    ~ChildRedrawBatch() {
+        // Restore only children that were visible before the update.
         for (auto it = visible_.rbegin(); it != visible_.rend(); ++it) {
             SendMessageW(*it, WM_SETREDRAW, TRUE, 0);
         }
@@ -64,8 +61,8 @@ public:
         RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
     }
 
-    RedrawBatch(const RedrawBatch&) = delete;
-    RedrawBatch& operator=(const RedrawBatch&) = delete;
+    ChildRedrawBatch(const ChildRedrawBatch&) = delete;
+    ChildRedrawBatch& operator=(const ChildRedrawBatch&) = delete;
 };
 
 void enable_control(HWND window, int id, bool enabled) {
@@ -763,7 +760,7 @@ void SetupView::refresh(bool installed, bool discards_pending) {
                 IsDlgButtonChecked(window_, IDC_OVERLAY) == BST_CHECKED;
     bool relayout = completed_;
     {
-        RedrawBatch batch(window_);
+        ChildRedrawBatch batch(window_);
         working_ = completed_ = failed_ = false;
         removing_ = !keep && installed;
         progress_value_ = 0;
