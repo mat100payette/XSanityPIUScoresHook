@@ -19,6 +19,9 @@ class SetupView {
     };
 
     HWND window_ = nullptr;
+    Icon large_icon_;
+    Icon small_icon_;
+    Icon header_icon_;
     SetupAppearance appearance_ = SetupAppearance::System;
     UINT dpi_ = 96;
     HFONT body_ = nullptr, heading_ = nullptr, small_ = nullptr, title_ = nullptr;
@@ -31,6 +34,7 @@ class SetupView {
 
     int scale(int value) const;
     void theme();
+    void icons();
     void fonts();
     void layout(const RECT* suggested = nullptr);
     void scroll_to(int position);

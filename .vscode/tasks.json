@@ -49,7 +49,7 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "Format C++",
+      "label": "Format sources",
       "type": "process",
       "command": "powershell.exe",
       "args": [
@@ -62,7 +62,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Check C++ formatting",
+      "label": "Check formatting",
       "type": "process",
       "command": "powershell.exe",
       "args": [

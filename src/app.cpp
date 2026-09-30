@@ -18,6 +18,10 @@ struct App {
     HWND account_dialog = nullptr;
     HANDLE stop = nullptr;
     NOTIFYICONDATAW icon{};
+    Icon large_icon;
+    Icon small_icon;
+    Icon account_large_icon;
+    Icon account_small_icon;
     UINT taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
     std::string overlay_error;
 
@@ -34,6 +38,7 @@ struct App {
 
     void initialize_account(HWND dialog) {
         account_dialog = dialog;
+        set_window_icons(dialog, account_large_icon, account_small_icon, IDI_APP, GetDpiForWindow(dialog));
         auto config = engine.config();
 
         SetDlgItemTextW(dialog, IDC_TOKEN, wide(engine.token()).c_str());
@@ -67,6 +72,11 @@ struct App {
             SetWindowLongPtrW(dialog, DWLP_USER, lparam);
             app->initialize_account(dialog);
             return TRUE;
+        }
+
+        if (message == WM_DPICHANGED && app) {
+            set_window_icons(
+                dialog, app->account_large_icon, app->account_small_icon, IDI_APP, HIWORD(wparam));
         }
 
         if (message != WM_COMMAND || !app) {
@@ -104,7 +114,7 @@ struct App {
         icon.uID = 1;
         icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         icon.uCallbackMessage = TrayMessage;
-        icon.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
+        icon.hIcon = small_icon.get();
         wcscpy_s(icon.szTip, L"PIU Companion");
 
         if (!Shell_NotifyIconW(NIM_ADD, &icon)) {
@@ -214,18 +224,25 @@ void check_game_connection(const Preferences& config) {
     }
 
     GameHook hook;
-    hook.preflight(config.game_root);
-    if (!hook.owned(GameHook::layer(config.game_root))) {
-        throw Error("The game connection is missing. Reopen setup and apply your installed components.");
+    if (hook.preflight(config.game_root).state != HookState::Current) {
+        throw Error("The game connection needs updating. Reopen setup and apply your installed components.");
     }
 }
 
 void create_app_window(App& app) {
-    WNDCLASSW type{};
+    auto dpi = GetDpiForSystem();
+    app.large_icon.load(
+        IDI_APP, GetSystemMetricsForDpi(SM_CXICON, dpi), GetSystemMetricsForDpi(SM_CYICON, dpi));
+    app.small_icon.load(
+        IDI_APP, GetSystemMetricsForDpi(SM_CXSMICON, dpi), GetSystemMetricsForDpi(SM_CYSMICON, dpi));
+
+    WNDCLASSEXW type{sizeof(type)};
     type.lpfnWndProc = window_proc;
     type.hInstance = GetModuleHandleW(nullptr);
     type.lpszClassName = WindowClass;
-    if (!RegisterClassW(&type)) {
+    type.hIcon = app.large_icon.get();
+    type.hIconSm = app.small_icon.get();
+    if (!RegisterClassExW(&type)) {
         fail("Register companion window");
     }
 

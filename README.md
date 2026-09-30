@@ -3,92 +3,57 @@
 [![CI](https://github.com/mat100payette/XSanityPIUScoresHook/actions/workflows/ci.yml/badge.svg)](https://github.com/mat100payette/XSanityPIUScoresHook/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-A small Windows companion that uploads new XSanity personal bests to [PIU Scores](https://piuscores.arroweclip.se). An **optional OBS overlay** shows only **current song · difficulty · your website PB**.
+Automatically upload your XSanity personal bests to [PIU Scores](https://piuscores.arroweclip.se). Add an optional OBS overlay showing **song · difficulty · website PB**.
 
-**Windows 10/11, x64**, with XSanity's **xsanity theme**.
+**Requires:** Windows 10/11 (x64) and XSanity with the **xsanity** theme.
 
-## Install and play
+## Get started
 
-1. Close XSanity and open **XSanityPIUScoresHook-v0.2.0-win-x64-setup.exe**.
-2. Choose your XSanity folder and components. **Automatic PB syncing** is checked; **OBS overlay** is unchecked. Either can be installed alone.
-3. Click **Install**. In the companion's account screen, enter your personal PIU Scores API token and select **Phoenix** or **Phoenix 2** to match your scores.
-4. Use **Play XSanity** from the Start menu to launch the game and companion together.
+1. **[Download the installer](https://github.com/mat100payette/XSanityPIUScoresHook/releases/latest)** — choose the `win-x64-setup.exe` asset.
+2. Close XSanity, open the installer, and select your game folder containing **Program64** (or **Program32**) and **Themes**.
+3. Choose **Automatic PB syncing**, **OBS overlay**, or both, then click **Install**. The overlay is off by default.
+4. Enter your personal PIU Scores API token and select **Phoenix** or **Phoenix 2** to match your scores.
+5. Open **Play XSanity** from the Start menu to launch the game and companion together.
 
-Click the companion's tray icon for **Account settings**, **Manage installation**, or **Exit**. Closing the game leaves the companion running. Each player uses their own account and game folder; share the installer, not your saved settings.
+The tray icon gives you **Account settings**, **Manage installation**, and **Exit**. Closing the game leaves the companion running.
 
-## Change or remove components
+## Set up the OBS overlay
 
-Reopen the downloaded installer, choose **Manage installation** from the Start menu or tray, or open the app's uninstall entry in Windows Settings. Setup shows your installed choices.
+With **OBS overlay** installed, add a **Browser Source** in OBS:
 
-| Selection | What runs |
+| Setting | Value |
 | --- | --- |
-| Automatic PB syncing | Upload eligible improved scores; no OBS listener |
-| OBS overlay | Read website PBs; no result capture or score uploads |
-| Both | Sync scores and show the overlay |
-| Neither | Remove the app, game connection, shortcuts, registration and saved account data |
+| URL | `http://127.0.0.1:8765/overlay` |
+| Width | `700` |
+| Height | `100` |
 
-Change the boxes and click **Apply changes**. Clearing both changes the button to **Remove all**. Removing syncing discards pending uploads; enabling it again captures new plays only. The remaining component keeps its account settings.
+The background is transparent, and the overlay hides outside gameplay. PB shows `—` if no website score or unique chart match is available.
 
-Both components use the same small game exporter. Setup keeps it while either is installed and removes it with the last component. Close XSanity when adding, moving, or removing that game connection. Changes that keep the existing connection can be applied while the game is open.
+## Change your setup
 
-Setup accepts an identical existing exporter and refuses to overwrite or remove a different or modified theme layer. It restores changed files and registration if an operation fails, and preserves unrelated files. Windows blocks replacing a running setup executable, so installed maintenance runs from a private temporary copy that is cleaned after exit.
+Close XSanity, then open **Manage installation** from the Start menu or tray. You can also reopen the installer.
 
-## OBS overlay
+| To… | Do this |
+| --- | --- |
+| Add or remove a component | Change its checkbox and click **Apply changes**. |
+| Update | Open the **latest downloaded installer** and click **Apply changes**. |
+| Move your game folder | Exit the companion before moving it. Select the new folder in setup and click **Apply changes**. |
+| Uninstall everything | Clear both checkboxes and click **Remove all**. |
 
-With **OBS overlay** installed, add an OBS **Browser Source**:
+- Updates and moves preserve account settings and pending uploads while syncing stays enabled. The OBS URL stays the same.
+- Removing syncing discards pending uploads. Enabling it again captures new plays only.
+- Removing both components also deletes saved account data.
 
-```text
-URL:    http://127.0.0.1:8765/overlay
-Width:  700
-Height: 100
-```
+## What gets synced?
 
-The transparent overlay hides outside gameplay. PB shows `—` when there is no website score or unique chart match. Its server listens only on your computer.
+- **Supported play:** normal single-player Single/Double charts with Phoenix scoring.
+- **Skipped play:** autoplay, changed music rates or judgement, disqualified results, custom or unmatched charts, training, missions, multiplayer, and courses.
+- **Personal bests:** compared against PIU Scores. A cleared stage beats a stage break; otherwise, the higher score wins. Existing game score history is not imported.
+- **Offline play:** results wait for the connection to return. If the companion reports an unresolved upload, check it on PIU Scores.
+- **Account changes:** finish pending uploads before switching accounts or mixes.
 
-## Score syncing
+## Development
 
-PIU Scores owns your PBs. XSanity supplies only the current chart and completed result; the companion never reads game score history. A passed stage takes priority over a broken stage, then the higher score wins. Website PBs refresh after an upload and once a minute.
+See [Contributing](CONTRIBUTING.md) for building, formatting, and publishing releases, or [Security](SECURITY.md) for account and data handling.
 
-Supports normal single-player **Single/Double** charts with **Phoenix scoring**. Skips autoplay, changed music rates, nonstandard judgement, disqualified results, ambiguous matches, and custom chart variants. Training, missions, multiplayer, and courses are unsupported.
-
-Offline results wait in a temporary queue. Accepted, covered, and skipped score payloads are removed; event receipts prevent duplicates across restarts. If a POST response is lost, the companion checks website PBs and avoids blind retries. An unresolved upload needs checking on PIU Scores. Keep the same account while results are pending; you can replace an expired token, but finish pending uploads before changing mix.
-
-The [PIU Scores API documentation](https://piuscores.arroweclip.se/swagger/index.html) describes the score contract. Tokens are encrypted for your Windows user and never exposed to OBS.
-
-## Files and development
-
-```text
-%LOCALAPPDATA%/Programs/XSanityPIUScoresHook/    Installed app and maintenance setup
-%LOCALAPPDATA%/XSanityPIUScoresHook/             Account settings and temporary queue
-<XSanity>/Themes/xsanity/BGAnimations/ScreenSystemLayer aux.lua
-<XSanity>/Save/PiuCompanion/                    Transient game exports
-```
-
-Install **Visual Studio Build Tools → Desktop development with C++**, including MSVC x64 tools and Windows SDK. From PowerShell in the repository:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Test -Package
-```
-
-This builds the app and installer, runs behavioral checks, and produces:
-
-```text
-dist/PiuCompanion.exe
-dist/PiuCompanionSetup.exe
-artifacts/XSanityPIUScoresHook-v0.2.0-win-x64-setup.exe
-artifacts/XSanityPIUScoresHook-v0.2.0-win-x64-setup.exe.sha256
-```
-
-Share the versioned installer. `VERSION` supplies executable and package versions. Omit switches for a build alone; use `-Configuration Debug` for `dist/Debug`. Open [XSanityPIUScoresHook.code-workspace](XSanityPIUScoresHook.code-workspace) in VS Code for C++20 editor settings and the **Build**, **Check**, and **Package** tasks.
-
-```text
-src/          Companion, API client, syncing, Win32 UI and overlay
-installer/    Setup, component changes, rollback and removal
-hook/         XSanity's transient export layer
-scripts/      One build/check/package command
-tests/        Fake API/game/installation checks and installer preview
-```
-
-Generated outputs stay outside Git. CI runs the same checks. To publish a release on GitHub, open **Actions → Release → Run workflow**, choose **patch**, **minor**, or **major**, and run it. The workflow handles versioning and publishes the installer and checksum. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [LICENSE](LICENSE).
-
-**Verification:** automated checks use fake game folders, account data, and installation registration. Live gameplay capture and authenticated uploads still need a real session. These local builds are unsigned.
+Automated checks use simulated game folders and accounts. Live gameplay capture and authenticated uploads still need a real-session check.

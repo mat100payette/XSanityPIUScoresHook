@@ -3,11 +3,95 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <algorithm>
+#include <set>
 
 namespace piu {
 namespace {
 constexpr wchar_t UninstallKey[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\XSanityPIUScoresHook";
+
+class SetupLock {
+    Handle mutex_;
+
+public:
+    SetupLock() : mutex_(CreateMutexW(nullptr, FALSE, L"Local\\XSanityPIUScoresHook.Setup")) {
+        if (!mutex_.get()) {
+            fail("Lock companion setup");
+        }
+
+        DWORD result = WaitForSingleObject(mutex_.get(), 0);
+        if (result != WAIT_OBJECT_0 && result != WAIT_ABANDONED) {
+            throw Error("Another setup operation is running. Let it finish before trying again.");
+        }
+    }
+
+    ~SetupLock() {
+        ReleaseMutex(mutex_.get());
+    }
+};
+
+struct InstallationReceipt {
+    InstallSelection selection;
+    std::string hook_fingerprint;
+    std::string bytes;
+};
+
+std::optional<InstallationReceipt> load_installation(const fs::path& folder) {
+    auto path = folder / L"installation.json";
+    safe_path(path);
+    if (!fs::exists(path)) {
+        return std::nullopt;
+    }
+
+    auto bytes = read(path, 65536);
+    try {
+        auto marker = parse(bytes);
+        auto schema = marker.GetNamedNumber(L"schema");
+        auto root_text = marker.GetNamedString(L"gameRoot");
+        std::wstring root_name(root_text.c_str(), root_text.size());
+        auto root = fs::path(root_name);
+        bool sync = marker.GetNamedBoolean(L"sync");
+        bool overlay = marker.GetNamedBoolean(L"overlay");
+        if (marker.GetNamedString(L"product") != L"XSanityPIUScoresHook" || schema != 1 ||
+            !root.is_absolute() || root_name.find(L'\0') != std::wstring::npos ||
+            root.wstring().find_first_of(L"\"\r\n") != std::wstring::npos || (!sync && !overlay)) {
+            throw Error("Invalid installation receipt.");
+        }
+
+        auto fingerprint = winrt::to_string(marker.GetNamedString(L"hookSha256"));
+        if (fingerprint.size() != 64 || !std::all_of(fingerprint.begin(), fingerprint.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            })) {
+            throw Error("Invalid exporter fingerprint.");
+        }
+
+        return InstallationReceipt{{root, sync, overlay}, std::move(fingerprint), std::move(bytes)};
+    } catch (const Error&) {
+        throw Error("The installation receipt is damaged or unsupported. Setup has not changed any files.");
+    } catch (const winrt::hresult_error&) {
+        throw Error("The installation receipt is damaged or unsupported. Setup has not changed any files.");
+    }
+}
+
+bool same_folder(const fs::path& left, const fs::path& right) {
+    if (left.empty() || right.empty()) {
+        return false;
+    }
+
+    safe_path(left);
+    safe_path(right);
+    auto left_path = fs::absolute(left).lexically_normal();
+    auto right_path = fs::absolute(right).lexically_normal();
+    if (_wcsicmp(left_path.c_str(), right_path.c_str()) == 0) {
+        return true;
+    }
+
+    if (!fs::exists(left_path) || !fs::exists(right_path)) {
+        return false;
+    }
+
+    return fs::equivalent(left_path, right_path);
+}
 
 struct Key {
     HKEY value = nullptr;
@@ -58,13 +142,15 @@ class Transaction {
     Registration registry_;
     std::map<fs::path, std::optional<std::string>> files_;
     std::vector<fs::path> directories_;
+    std::set<fs::path> changed_files_;
+    bool registry_changed_ = false;
     bool done_ = false;
 
 public:
     explicit Transaction(InstallHost& host) : host_(host), registry_(host.registration()) {
     }
 
-    void snapshot(const fs::path& path) {
+    void snapshot(const fs::path& path, size_t limit = 64 * 1024 * 1024) {
         safe_path(path);
         if (files_.contains(path)) {
             return;
@@ -74,8 +160,29 @@ public:
             throw Error("Setup expected a file: " + utf8(path.wstring()));
         }
 
-        files_.emplace(
-            path, fs::exists(path) ? std::optional<std::string>(read(path, 64 * 1024 * 1024)) : std::nullopt);
+        files_.emplace(path, fs::exists(path) ? std::optional<std::string>(read(path, limit)) : std::nullopt);
+    }
+
+    void expect_file(const fs::path& path, const std::optional<std::string>& expected) {
+        snapshot(path, 65536);
+        if (files_.at(path) != expected) {
+            files_.erase(path);
+            throw Error("The installation receipt changed during setup. Run setup again.");
+        }
+    }
+
+    void expect_hook(const fs::path& path, std::string_view expected_fingerprint) {
+        snapshot(path, 65536);
+        const auto& bytes = files_.at(path);
+        auto actual = bytes ? GameHook::fingerprint(*bytes) : std::string{};
+        if (actual != expected_fingerprint) {
+            files_.erase(path);
+            throw Error("The game export layer changed during setup. Setup will leave it untouched.");
+        }
+    }
+
+    void changed(const fs::path& path) {
+        changed_files_.insert(path);
     }
 
     void directory(const fs::path& path) {
@@ -88,20 +195,23 @@ public:
         }
 
         for (auto it = missing.rbegin(); it != missing.rend(); ++it) {
-            fs::create_directory(*it);
-            directories_.push_back(*it);
+            if (fs::create_directory(*it)) {
+                directories_.push_back(*it);
+            }
         }
     }
 
     void write(const fs::path& path, std::string_view bytes) {
         snapshot(path);
         directory(path.parent_path());
+        changed(path);
         atomic_write(path, bytes);
         host_.checkpoint();
     }
 
     void remove(const fs::path& path) {
         snapshot(path);
+        changed(path);
         if (fs::exists(path)) {
             fs::remove(path);
         }
@@ -112,11 +222,13 @@ public:
     void shortcut(const fs::path& path, const fs::path& target, const std::wstring& args) {
         snapshot(path);
         directory(path.parent_path());
+        changed(path);
         host_.shortcut(path, target, args);
         host_.checkpoint();
     }
 
     void registration(const Registration& data) {
+        registry_changed_ = true;
         host_.registration(data);
         host_.checkpoint();
     }
@@ -128,7 +240,12 @@ public:
     void rollback() {
         std::string failures;
         for (const auto& [path, bytes] : files_) {
+            if (!changed_files_.contains(path)) {
+                continue;
+            }
+
             try {
+                safe_path(path);
                 if (bytes) {
                     atomic_write(path, *bytes);
                 } else if (fs::exists(path)) {
@@ -139,15 +256,22 @@ public:
             }
         }
 
-        try {
-            host_.registration(registry_);
-        } catch (...) {
-            failures += " uninstall registration";
+        if (registry_changed_) {
+            try {
+                host_.registration(registry_);
+            } catch (...) {
+                failures += " uninstall registration";
+            }
         }
 
         for (auto it = directories_.rbegin(); it != directories_.rend(); ++it) {
-            std::error_code ignored;
-            fs::remove(*it, ignored);
+            try {
+                safe_path(*it);
+                std::error_code ignored;
+                fs::remove(*it, ignored);
+            } catch (...) {
+                failures += " " + utf8(it->wstring());
+            }
         }
 
         done_ = true;
@@ -167,8 +291,13 @@ public:
 };
 
 void remove_empty(const fs::path& path) {
-    std::error_code ignored;
-    fs::remove(path, ignored);
+    try {
+        safe_path(path);
+        std::error_code ignored;
+        fs::remove(path, ignored);
+    } catch (const Error&) {
+        // Optional cleanup must not follow a newly introduced junction.
+    }
 }
 } // namespace
 
@@ -304,19 +433,12 @@ void WindowsInstallHost::shortcut(const fs::path& file, const fs::path& target, 
 }
 
 bool Installer::installed() const {
-    auto path = paths_.app / L"installation.json";
-    if (!fs::exists(path)) {
-        return false;
-    }
-
-    auto marker = parse(read(path, 65536));
-    return str(marker, L"product") == "XSanityPIUScoresHook" && number(marker, L"schema") == 1;
+    return load_installation(paths_.app).has_value();
 }
 
 InstallSelection Installer::selection() const {
-    if (installed()) {
-        auto marker = parse(read(paths_.app / L"installation.json", 65536));
-        return {wide(str(marker, L"gameRoot")), flag(marker, L"sync"), flag(marker, L"overlay")};
+    if (auto receipt = load_installation(paths_.app)) {
+        return receipt->selection;
     }
 
     auto config = load_preferences(paths_.state);
@@ -325,6 +447,7 @@ InstallSelection Installer::selection() const {
 
 void Installer::apply(
     const InstallSelection& selection, const std::function<void(int, std::wstring_view)>& progress) {
+    SetupLock lock;
     // UI notifications must not affect a file transaction or its rollback.
     auto report = [&](int percent, std::wstring_view status) {
         if (progress) {
@@ -336,9 +459,10 @@ void Installer::apply(
     };
     report(0, L"Checking your setup");
     bool keep = selection.sync || selection.overlay;
-    bool existing = installed();
-    auto previous = this->selection();
+    auto receipt = load_installation(paths_.app);
+    bool existing = receipt.has_value();
     auto config = keep ? load_preferences(paths_.state) : Preferences{};
+    auto previous = receipt ? receipt->selection : InstallSelection{config.game_root, config.sync, false};
     auto old_root = existing ? previous.game_root : config.game_root;
     auto root = keep ? GameHook::validate(selection.game_root) : old_root;
     if (!keep && !existing) {
@@ -357,9 +481,7 @@ void Installer::apply(
                             "it untouched.");
             }
         }
-    }
 
-    if (!existing) {
         for (auto name : {L"Play XSanity.lnk", L"Manage installation.lnk"}) {
             if (fs::exists(paths_.menu / name)) {
                 throw Error("The Start menu folder already contains an unrecognized shortcut. Setup will "
@@ -368,27 +490,29 @@ void Installer::apply(
         }
     }
 
+    // The user-selected folder may contain the recorded exporter after a move or copy.
+    auto installed_fingerprint = receipt ? receipt->hook_fingerprint : std::string{};
+    bool moving = keep && !old_root.empty() && !same_folder(old_root, root);
+    HookStatus destination;
     if (keep) {
-        hook_.preflight(root);
+        destination = hook_.preflight(root, installed_fingerprint);
     }
 
-    auto same = [](const fs::path& left, const fs::path& right) {
-        return _wcsicmp(fs::absolute(left).lexically_normal().c_str(),
-                   fs::absolute(right).lexically_normal().c_str()) == 0;
-    };
-    bool remove_old = !old_root.empty() && (!keep || !same(old_root, root));
+    bool remove_old = !old_root.empty() && (!keep || moving);
+    HookStatus old_hook;
     if (remove_old) {
-        safe_path(GameHook::layer(old_root));
         safe_path(GameHook::exports(old_root));
-        if (fs::exists(GameHook::layer(old_root)) && !hook_.owned(GameHook::layer(old_root))) {
+        old_hook = hook_.inspect(GameHook::layer(old_root), installed_fingerprint);
+        if (old_hook.state == HookState::Conflict) {
             throw Error("The installed game export layer was modified. Restore it before removing or moving "
                         "this installation.");
         }
     }
 
-    bool change_layer = remove_old || (keep && !hook_.owned(GameHook::layer(root)));
+    bool replace_hook = keep && destination.state != HookState::Current;
+    bool change_layer = remove_old || replace_hook;
     if (change_layer && host_.game_is_running()) {
-        throw Error("Close XSanity before adding, moving, or removing its game connection.");
+        throw Error("Close XSanity before adding, updating, moving, or removing its game connection.");
     }
 
     // Finish any in-flight POST before reading the queue or backing up settings.
@@ -398,19 +522,44 @@ void Installer::apply(
         config = load_preferences(paths_.state);
     }
 
+    if ((keep && hook_.preflight(root, installed_fingerprint) != destination) ||
+        (remove_old && hook_.inspect(GameHook::layer(old_root), installed_fingerprint) != old_hook)) {
+        throw Error("The game export layer changed during setup. Run setup again.");
+    }
+
+    if (change_layer && host_.game_is_running()) {
+        throw Error("XSanity started during setup. Close it, then apply the changes again.");
+    }
+
     Transaction transaction(host_);
     try {
+        transaction.expect_file(paths_.app / L"installation.json",
+            receipt ? std::optional<std::string>(receipt->bytes) : std::nullopt);
         report(30, keep ? L"Connecting XSanity" : L"Removing the game connection");
         if (remove_old) {
+            transaction.expect_hook(GameHook::layer(old_root), old_hook.fingerprint);
             transaction.remove(GameHook::layer(old_root));
             for (auto file : {L"current.json", L"result.json"}) {
-                transaction.remove(GameHook::exports(old_root) / file);
+                auto path = GameHook::exports(old_root) / file;
+                if (fs::exists(path)) {
+                    transaction.remove(path);
+                }
             }
         }
 
         if (keep) {
-            if (!hook_.owned(GameHook::layer(root))) {
+            transaction.expect_hook(GameHook::layer(root), destination.fingerprint);
+            if (replace_hook) {
                 transaction.write(GameHook::layer(root), hook_.source());
+            }
+
+            if (replace_hook || moving) {
+                for (auto file : {L"current.json", L"result.json"}) {
+                    auto path = GameHook::exports(root) / file;
+                    if (fs::exists(path)) {
+                        transaction.remove(path);
+                    }
+                }
             }
 
             transaction.directory(GameHook::exports(root));
@@ -419,26 +568,19 @@ void Installer::apply(
             next.game_root = root;
             next.sync = selection.sync;
             next.overlay = selection.overlay;
-            if ((!previous.sync && next.sync) || !existing || !same(old_root, root)) {
+            if (replace_hook || moving || (!previous.sync && next.sync) || !existing) {
                 next.capture_after = now();
             }
 
             transaction.snapshot(paths_.state / L"settings.json");
             transaction.directory(paths_.state);
+            transaction.changed(paths_.state / L"settings.json");
             save_preferences(paths_.state, next);
             host_.checkpoint();
             if (!next.sync && fs::exists(paths_.state / L"uploads.json")) {
                 transaction.remove(paths_.state / L"uploads.json");
             }
 
-            Object marker;
-            put(marker, L"product", "XSanityPIUScoresHook");
-            put(marker, L"schema", 1);
-            put(marker, L"version", PIU_VERSION);
-            put(marker, L"gameRoot", utf8(root.wstring()));
-            put(marker, L"sync", next.sync);
-            put(marker, L"overlay", next.overlay);
-            transaction.write(paths_.app / L"installation.json", encode(marker));
             report(60, L"Installing the companion");
             transaction.write(paths_.app / L"PiuCompanion.exe", app_bytes_);
             transaction.write(paths_.app / L"PiuCompanionSetup.exe", setup_bytes_);
@@ -449,6 +591,17 @@ void Installer::apply(
                 paths_.menu / L"Manage installation.lnk", paths_.app / L"PiuCompanionSetup.exe", L"");
             report(90, L"Finishing installation");
             transaction.registration(product_registration(paths_));
+
+            // Commit the receipt last, after the hook and companion have been installed.
+            Object marker;
+            put(marker, L"product", "XSanityPIUScoresHook");
+            put(marker, L"schema", 1);
+            put(marker, L"version", PIU_VERSION);
+            put(marker, L"gameRoot", utf8(root.wstring()));
+            put(marker, L"hookSha256", hook_.fingerprint());
+            put(marker, L"sync", next.sync);
+            put(marker, L"overlay", next.overlay);
+            transaction.write(paths_.app / L"installation.json", encode(marker));
         } else {
             report(60, L"Removing the companion and saved account data");
             transaction.registration(std::nullopt);

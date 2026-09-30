@@ -32,13 +32,18 @@ function Quote([string]$value) { return '"' + $value + '"' }
 function ResourcePath([string]$value) { return $value.Replace('\', '\\') }
 function Write-Resources([string]$name, [string]$description, [bool]$embedApp) {
     $fileVersion = $version.Replace('.', ',') + ',0'
+    $icons = "IDI_SETUP ICON `"$(ResourcePath (Join-Path $repoRoot 'installer\setup.ico'))`""
+    if (-not $embedApp) {
+        $icons = "IDI_APP ICON `"$(ResourcePath (Join-Path $repoRoot 'src\app.ico'))`"`n" + $icons
+    }
+
     $resources = @"
 #include <windows.h>
 #include "$(ResourcePath (Join-Path $repoRoot 'src\dialogs.rc'))"
 101 RCDATA "$(ResourcePath (Join-Path $repoRoot 'hook\ScreenSystemLayer aux.lua'))"
 102 RCDATA "$(ResourcePath (Join-Path $repoRoot 'src\overlay.html'))"
 104 RCDATA "$(ResourcePath (Join-Path $repoRoot 'LICENSE'))"
-105 ICON "$(ResourcePath (Join-Path $repoRoot 'src\app.ico'))"
+$icons
 1 RT_MANIFEST "$(ResourcePath (Join-Path $repoRoot 'src\app.manifest'))"
 1 VERSIONINFO
 FILEVERSION $fileVersion

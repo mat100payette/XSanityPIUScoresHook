@@ -134,6 +134,11 @@ void SetupView::theme() {
     DwmSetWindowAttribute(window_, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
 }
 
+void SetupView::icons() {
+    set_window_icons(window_, large_icon_, small_icon_, IDI_SETUP, dpi_);
+    header_icon_.load(IDI_SETUP, scale(56), scale(56));
+}
+
 void SetupView::fonts() {
     auto make = [&](int height, int weight, const wchar_t* face) {
         auto font = CreateFontW(-scale(height),
@@ -343,9 +348,8 @@ void SetupView::initialize(HWND window, SetupAppearance appearance, UINT dpi) {
         }
     }
 
-    auto icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
-    SendMessageW(window_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
-    SendMessageW(window_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
+    icons();
+
     theme();
     fonts();
     layout();
@@ -362,13 +366,7 @@ void SetupView::paint(HDC dc) {
     FillRect(dc, &accent, brush);
     DeleteObject(brush);
     if (!theme_.contrast) {
-        auto icon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr),
-            MAKEINTRESOURCEW(IDI_APP),
-            IMAGE_ICON,
-            scale(56),
-            scale(56),
-            LR_SHARED));
-        DrawIconEx(dc, scale(28), scale(25), icon, scale(56), scale(56), 0, nullptr, DI_NORMAL);
+        DrawIconEx(dc, scale(28), scale(25), header_icon_.get(), scale(56), scale(56), 0, nullptr, DI_NORMAL);
     }
 
     bool enabled = IsWindowEnabled(GetDlgItem(window_, IDC_ROOT)) != FALSE;
@@ -621,6 +619,7 @@ std::optional<INT_PTR> SetupView::message(UINT message, WPARAM wparam, LPARAM lp
     if (message == WM_DPICHANGED) {
         auto old_dpi = dpi_;
         dpi_ = HIWORD(wparam);
+        icons();
         scroll_ = MulDiv(scroll_, static_cast<int>(dpi_), static_cast<int>(old_dpi));
         fonts();
         layout(reinterpret_cast<const RECT*>(lparam));

@@ -1,6 +1,7 @@
 #pragma once
 #ifndef RC_INVOKED
 #include "platform.h"
+#include <commctrl.h>
 #endif
 
 #define IDD_ACCOUNT 201
@@ -21,9 +22,48 @@
 #define IDC_FOLDER_LABEL 1019
 #define IDC_DETAILS 1020
 #define IDI_APP 105
+#define IDI_SETUP 106
 
 #ifndef RC_INVOKED
 namespace piu {
+class Icon {
+    HICON value_ = nullptr;
+
+public:
+    Icon() = default;
+
+    ~Icon() {
+        if (value_) {
+            DestroyIcon(value_);
+        }
+    }
+
+    Icon(const Icon&) = delete;
+    Icon& operator=(const Icon&) = delete;
+
+    void load(int resource, int width, int height) {
+        HICON next = nullptr;
+        winrt::check_hresult(LoadIconWithScaleDown(
+            GetModuleHandleW(nullptr), MAKEINTRESOURCEW(resource), width, height, &next));
+        if (value_) {
+            DestroyIcon(value_);
+        }
+
+        value_ = next;
+    }
+
+    HICON get() const {
+        return value_;
+    }
+};
+
+inline void set_window_icons(HWND window, Icon& large, Icon& small, int resource, UINT dpi) {
+    large.load(resource, GetSystemMetricsForDpi(SM_CXICON, dpi), GetSystemMetricsForDpi(SM_CYICON, dpi));
+    small.load(resource, GetSystemMetricsForDpi(SM_CXSMICON, dpi), GetSystemMetricsForDpi(SM_CYSMICON, dpi));
+    SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(large.get()));
+    SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small.get()));
+}
+
 inline std::wstring control_text(HWND dialog, int id) {
     auto control = GetDlgItem(dialog, id);
     int length = GetWindowTextLengthW(control);

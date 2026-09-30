@@ -12,4 +12,7 @@
         <use href="#arrow" transform="rotate(270 128 128)"/>
     </g>
     <path d="M128 103L153 128L128 153L103 128Z" fill="#ffd25e"/>
+    <circle cx="206" cy="208" r="44" fill="#24dccd" stroke="#162536" stroke-width="10"/>
+    <path d="M206 181V210M193 198L206 211L219 198M185 222V230H227V222"
+        fill="none" stroke="#14363a" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

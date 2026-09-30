@@ -450,10 +450,14 @@ void installer_checks() {
     Installer installer(paths, host, hook, "native app", "native setup", "license");
     check(!installer.installed() && installer.selection().sync && !installer.selection().overlay,
         "fresh installer defaults to sync with overlay unchecked");
+    auto layer = GameHook::layer(game);
     installer.apply({game, true, false});
     auto config = load_preferences(paths.state);
     check(installer.installed() && config.sync && !config.overlay && hook.owned(GameHook::layer(game)),
         "fresh sync-only installation creates shared layer");
+    check(hook.current(layer) &&
+              str(parse(read(paths.app / L"installation.json")), L"hookSha256") == hook.fingerprint(),
+        "fresh setup installs the current exporter and records its fingerprint");
     check(host.values && fs::exists(paths.menu / L"Play XSanity.lnk") &&
               fs::exists(paths.menu / L"Manage installation.lnk"),
         "setup registers maintenance and simultaneous launch shortcuts");
@@ -563,11 +567,12 @@ void installer_checks() {
         "fresh install refuses other layer");
     check(
         read(GameHook::layer(conflict)) == "other theme layer", "other theme source preserved byte for byte");
-    auto old = fixture.root / L"legacy";
-    atomic_write(old / L"settings.json", R"({"Mix":"Phoenix2","ProtectedToken":"","GameRoot":""})");
-    auto legacy = load_preferences(old);
-    check(legacy.mix == "Phoenix2" && legacy.sync && !legacy.overlay,
-        "old C# settings migrate to native defaults");
+    auto defaults_folder = fixture.root / L"settings-defaults";
+    atomic_write(
+        defaults_folder / L"settings.json", R"({"Mix":"Phoenix2","ProtectedToken":"","GameRoot":""})");
+    auto defaults = load_preferences(defaults_folder);
+    check(defaults.mix == "Phoenix2" && defaults.sync && !defaults.overlay,
+        "missing optional settings use component defaults");
     auto duplicate_layer = fixture.game(L"duplicate");
     fs::create_directory(GameHook::layer(duplicate_layer).parent_path() / L"ScreenSystemLayer aux");
     rejects(
@@ -583,6 +588,560 @@ void installer_checks() {
     fresh.apply({game, false, false});
     check(!fresh.installed() && !fs::exists(GameHook::layer(game)),
         "full uninstall works with damaged account settings");
+}
+
+using FileSnapshot = std::map<fs::path, std::string>;
+
+FileSnapshot snapshot_files(const fs::path& root) {
+    FileSnapshot files;
+    for (const auto& entry : fs::recursive_directory_iterator(root)) {
+        if (entry.is_regular_file()) {
+            files.emplace(entry.path(), read(entry.path()));
+        }
+    }
+
+    return files;
+}
+
+bool same_registration(const Registration& left, const Registration& right) {
+    if (left.has_value() != right.has_value()) {
+        return false;
+    }
+
+    if (!left) {
+        return true;
+    }
+
+    if (left->size() != right->size()) {
+        return false;
+    }
+
+    for (const auto& [name, value] : *left) {
+        auto found = right->find(name);
+        if (found == right->end() || found->second.type != value.type || found->second.bytes != value.bytes) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+struct HookUpgradeFixture {
+    Fixture files;
+    fs::path game;
+    InstallPaths paths;
+    FakeHost host;
+
+    explicit HookUpgradeFixture(const std::string& name)
+        : files(name.c_str()), game(files.game()),
+          paths{files.root / L"app", files.root / L"state", files.root / L"menu"} {
+    }
+
+    Installer installer(const GameHook& hook) {
+        return Installer(paths, host, hook, "new app", "new setup", "license");
+    }
+
+    void move_game() {
+        auto destination = files.root / L"moved game";
+        fs::rename(game, destination);
+        game = destination;
+    }
+
+    void seed() {
+        auto preferences = load_preferences(paths.state);
+        preferences.mix = "Phoenix2";
+        preferences.protected_token = protect("upgrade-account-token");
+        preferences.capture_after = 1;
+        save_preferences(paths.state, preferences);
+
+        Store queue;
+        queue.pending.push_back({result("queued-before-upgrade"), "Phoenix2", iso_time(now()), "queued"});
+        queue.receipts.emplace("previous-upload", "accepted");
+        save_store(paths.state, queue);
+        write_current(game, result("old-current"));
+        atomic_write(GameHook::exports(game) / L"result.json", encode(result_json(result("old-result"))));
+        atomic_write(GameHook::exports(game) / L"keep.txt", "unrelated export file");
+    }
+};
+
+void hook_receipt_checks() {
+    const GameHook first("return Def.ActorFrame {}\n-- test exporter release 1\n");
+    const GameHook latest("return Def.ActorFrame {}\n-- test exporter release 9\n");
+    HookUpgradeFixture marker_errors("hook-marker-errors");
+    marker_errors.installer(first).apply({marker_errors.game, true, false});
+    auto valid_marker = read(marker_errors.paths.app / L"installation.json");
+    auto error_setup = marker_errors.installer(latest);
+    auto refuses_marker = [&](const std::optional<std::string>& content, const char* label) {
+        auto path = marker_errors.paths.app / L"installation.json";
+        if (content) {
+            atomic_write(path, *content);
+        } else {
+            fs::remove(path);
+        }
+
+        auto files = snapshot_files(marker_errors.files.root);
+        auto stops = marker_errors.host.stops;
+        rejects(
+            [&] {
+                error_setup.apply({marker_errors.game, true, false});
+            },
+            label);
+        check(snapshot_files(marker_errors.files.root) == files && marker_errors.host.stops == stops,
+            "invalid receipt refuses maintenance before changing files or stopping companion");
+        atomic_write(path, valid_marker);
+    };
+    refuses_marker(std::nullopt, "missing marker cannot adopt an unknown installed app or previous exporter");
+    refuses_marker("damaged JSON", "malformed installation receipt is refused");
+    for (auto key : {L"product", L"gameRoot", L"sync", L"overlay", L"hookSha256"}) {
+        auto invalid = parse(valid_marker);
+        invalid.Insert(key, Value::CreateNullValue());
+        refuses_marker(encode(invalid), "wrong typed required installation field is refused");
+    }
+
+    auto missing_hash = parse(valid_marker);
+    missing_hash.Remove(L"hookSha256");
+    refuses_marker(encode(missing_hash), "installation receipt requires an exporter fingerprint");
+    for (double schema : {0.0, 2.0, 1.5}) {
+        auto invalid = parse(valid_marker);
+        invalid.Insert(L"schema", Value::CreateNumberValue(schema));
+        refuses_marker(encode(invalid), "unsupported or fractional installation schema is refused");
+    }
+
+    auto wrong_hash = parse(valid_marker);
+    put(wrong_hash, L"hookSha256", std::string(64, '0'));
+    refuses_marker(encode(wrong_hash), "receipt cannot authorize a previous exporter whose hash differs");
+    put(wrong_hash, L"hookSha256", "not-a-sha256");
+    refuses_marker(encode(wrong_hash), "invalid fingerprint syntax is refused");
+    auto empty_root = parse(valid_marker);
+    put(empty_root, L"gameRoot", "");
+    refuses_marker(encode(empty_root), "receipt cannot refer to an empty game folder");
+
+    auto nul_root = parse(valid_marker);
+    auto root_with_nul = utf8(marker_errors.game.wstring()) + std::string(1, '\0') + "ignored";
+    put(nul_root, L"gameRoot", root_with_nul);
+    refuses_marker(encode(nul_root), "embedded NUL cannot truncate receipt game folder validation");
+    auto nul_hash = parse(valid_marker);
+    put(nul_hash, L"hookSha256", first.fingerprint() + std::string(1, '\0') + "ignored");
+    refuses_marker(encode(nul_hash), "embedded NUL cannot truncate receipt fingerprint validation");
+
+    HookUpgradeFixture recovery("hook-repair");
+    recovery.installer(first).apply({recovery.game, true, false});
+    recovery.seed();
+    auto recovery_queue = read(recovery.paths.state / L"uploads.json");
+    fs::remove(GameHook::layer(recovery.game));
+    recovery.installer(latest).apply({recovery.game, true, false});
+    check(latest.current(GameHook::layer(recovery.game)) &&
+              read(recovery.paths.state / L"uploads.json") == recovery_queue &&
+              !fs::exists(GameHook::exports(recovery.game) / L"result.json"),
+        "valid receipt repairs a missing exporter without losing pending uploads");
+}
+
+void hook_race_checks() {
+    const GameHook first("return Def.ActorFrame {}\n-- test exporter release 1\n");
+    const GameHook latest("return Def.ActorFrame {}\n-- test exporter release 9\n");
+
+    struct EditingHost : FakeHost {
+        fs::path target;
+
+        void stop_companion() override {
+            FakeHost::stop_companion();
+            atomic_write(target, "external change while companion stops");
+        }
+    };
+
+    HookUpgradeFixture race("hook-stop-race");
+    race.installer(first).apply({race.game, true, false});
+    race.seed();
+    EditingHost editing;
+    editing.values = race.host.values;
+    editing.target = GameHook::layer(race.game);
+    auto race_files = snapshot_files(race.files.root);
+    race_files[editing.target] = "external change while companion stops";
+    Installer race_setup(race.paths, editing, latest, "app", "setup", "license");
+    rejects(
+        [&] {
+            race_setup.apply({race.game, true, false});
+        },
+        "exporter changes during companion shutdown are checked again before mutation");
+    check(snapshot_files(race.files.root) == race_files &&
+              same_registration(editing.values, race.host.values) && editing.stops == 1,
+        "post-shutdown refusal preserves the external change and all installed state");
+
+    struct StartingGameHost : FakeHost {
+        void stop_companion() override {
+            FakeHost::stop_companion();
+            running = true;
+        }
+    };
+
+    StartingGameHost starting;
+    starting.values = race.host.values;
+    atomic_write(editing.target, first.source());
+    auto before_game_start = snapshot_files(race.files.root);
+    Installer starting_setup(race.paths, starting, latest, "app", "setup", "license");
+    rejects(
+        [&] {
+            starting_setup.apply({race.game, true, false});
+        },
+        "game starting during companion shutdown prevents exporter mutation");
+    check(snapshot_files(race.files.root) == before_game_start &&
+              same_registration(starting.values, race.host.values),
+        "late game-start refusal preserves the old exporter and all installed state");
+
+    HookUpgradeFixture concurrent("hook-concurrent");
+    concurrent.installer(first).apply({concurrent.game, true, false});
+    auto background_setup = concurrent.installer(latest);
+    auto competing_setup = concurrent.installer(latest);
+    Handle ready(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    Handle resume(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!ready.get() || !resume.get()) {
+        fail("Create concurrent setup test events");
+    }
+
+    std::exception_ptr background_error;
+    auto stops = concurrent.host.stops;
+    auto concurrent_files = snapshot_files(concurrent.files.root);
+    std::thread background([&] {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            background_setup.apply({concurrent.game, true, false}, [&](int percent, std::wstring_view) {
+                if (percent == 30) {
+                    SetEvent(ready.get());
+                    WaitForSingleObject(resume.get(), 10000);
+                }
+            });
+            winrt::uninit_apartment();
+        } catch (...) {
+            background_error = std::current_exception();
+        }
+    });
+    auto signaled = WaitForSingleObject(ready.get(), 10000) == WAIT_OBJECT_0;
+    bool refused = false;
+    if (signaled) {
+        try {
+            competing_setup.apply({concurrent.game, true, false});
+        } catch (...) {
+            refused = true;
+        }
+    }
+
+    bool untouched = snapshot_files(concurrent.files.root) == concurrent_files;
+    SetEvent(resume.get());
+    background.join();
+    if (background_error) {
+        std::rethrow_exception(background_error);
+    }
+
+    check(signaled && refused && untouched && concurrent.host.stops == stops + 1,
+        "overlapping setup refuses a second operation before companion stop or file mutation");
+    check(latest.current(GameHook::layer(concurrent.game)),
+        "serialized upgrade completes successfully after competing setup is refused");
+}
+
+void hook_relocation_checks() {
+    const GameHook first("return Def.ActorFrame {}\n-- test exporter release 1\n");
+    const GameHook latest("return Def.ActorFrame {}\n-- test exporter release 9\n");
+    for (bool upgrade : {false, true}) {
+        HookUpgradeFixture moved(upgrade ? "hook-move-upgrade" : "hook-move-current");
+        moved.installer(first).apply({moved.game, true, true});
+        moved.seed();
+        auto old_root = moved.game;
+        auto token = load_preferences(moved.paths.state).protected_token;
+        auto queue = read(moved.paths.state / L"uploads.json");
+        auto timestamp = fs::file_time_type::clock::now() - std::chrono::hours(48);
+        fs::last_write_time(GameHook::layer(moved.game), timestamp);
+        moved.move_game();
+        const auto& target = upgrade ? latest : first;
+        auto setup = moved.installer(target);
+
+        moved.host.running = true;
+        auto before = snapshot_files(moved.files.root);
+        auto stops = moved.host.stops;
+        rejects(
+            [&] {
+                setup.apply({moved.game, true, true});
+            },
+            "reconnecting a moved game requires the game closed even if the exporter is current");
+        check(snapshot_files(moved.files.root) == before && moved.host.stops == stops,
+            "running-game relocation leaves the moved folder and installed state untouched");
+
+        moved.host.running = false;
+        setup.apply({moved.game, true, true});
+        auto marker = parse(read(moved.paths.app / L"installation.json"));
+        auto config = load_preferences(moved.paths.state);
+        check(!fs::exists(old_root) && target.current(GameHook::layer(moved.game)) &&
+                  config.game_root == moved.game && str(marker, L"gameRoot") == utf8(moved.game.wstring()) &&
+                  str(marker, L"hookSha256") == target.fingerprint(),
+            "relocation adopts the recorded exporter and commits its new path and target version");
+        check(config.sync && config.overlay && config.mix == "Phoenix2" && config.protected_token == token &&
+                  read(moved.paths.state / L"uploads.json") == queue,
+            "move and upgrade preserve component choices, account and pending uploads");
+        check(config.capture_after > 1 && !fs::exists(GameHook::exports(moved.game) / L"current.json") &&
+                  !fs::exists(GameHook::exports(moved.game) / L"result.json") &&
+                  read(GameHook::exports(moved.game) / L"keep.txt") == "unrelated export file",
+            "relocation clears stale exports and advances capture cutoff without removing unrelated files");
+        if (!upgrade) {
+            check(fs::last_write_time(GameHook::layer(moved.game)) == timestamp,
+                "relocation keeps a current exporter without rewriting it");
+        }
+
+        moved.installer(latest).apply({moved.game, false, false});
+        check(!fs::exists(GameHook::layer(moved.game)) && fs::exists(game_executable(moved.game)) &&
+                  !fs::exists(old_root) && !setup.installed(),
+            "uninstall follows the relocated receipt and preserves the game");
+    }
+
+    HookUpgradeFixture copied("hook-copy-upgrade");
+    copied.installer(first).apply({copied.game, false, true});
+    auto config = load_preferences(copied.paths.state);
+    config.mix = "Phoenix2";
+    config.protected_token = protect("copy-account-token");
+    save_preferences(copied.paths.state, config);
+    atomic_write(GameHook::exports(copied.game) / L"current.json", "stale chart");
+    atomic_write(GameHook::exports(copied.game) / L"keep.txt", "unrelated file");
+    auto destination = copied.files.root / L"copied game";
+    fs::copy(copied.game, destination, fs::copy_options::recursive);
+    auto copied_setup = copied.installer(latest);
+    for (const auto& root : {copied.game, destination}) {
+        atomic_write(GameHook::layer(root), first.source() + "-- owner edit\n");
+        auto before = snapshot_files(copied.files.root);
+        auto stops = copied.host.stops;
+        rejects(
+            [&] {
+                copied_setup.apply({destination, false, true});
+            },
+            "relocation refuses an edited exporter in either the old or selected folder");
+        check(snapshot_files(copied.files.root) == before && copied.host.stops == stops,
+            "conflicting relocation preserves both folders and receipt before stopping the companion");
+        atomic_write(GameHook::layer(root), first.source());
+    }
+
+    copied_setup.apply({destination, false, true});
+    check(latest.current(GameHook::layer(destination)) && !fs::exists(GameHook::layer(copied.game)) &&
+              fs::exists(game_executable(copied.game)) &&
+              read(GameHook::exports(copied.game) / L"keep.txt") == "unrelated file" &&
+              read(GameHook::exports(destination) / L"keep.txt") == "unrelated file" &&
+              !fs::exists(GameHook::exports(copied.game) / L"current.json") &&
+              !fs::exists(GameHook::exports(destination) / L"current.json"),
+        "selecting a copied game transfers the exporter and clears stale charts while preserving both games");
+    auto relocated = load_preferences(copied.paths.state);
+    check(!relocated.sync && relocated.overlay && relocated.game_root == destination &&
+              relocated.mix == config.mix && relocated.protected_token == config.protected_token &&
+              !fs::exists(copied.paths.state / L"uploads.json"),
+        "overlay-only relocation retains account settings without enabling syncing or creating a queue");
+
+    HookUpgradeFixture race("hook-move-race");
+    race.installer(first).apply({race.game, true, false});
+    race.seed();
+    race.move_game();
+    auto layer = GameHook::layer(race.game);
+    auto before = snapshot_files(race.files.root);
+    before[layer] = "external change at relocation commit";
+    auto registry = race.host.values;
+    rejects(
+        [&] {
+            race.installer(latest).apply({race.game, true, false}, [&](int percent, std::wstring_view) {
+                if (percent == 30) {
+                    atomic_write(layer, "external change at relocation commit");
+                }
+            });
+        },
+        "relocation checks the destination again inside its transaction before replacing it");
+    check(snapshot_files(race.files.root) == before && same_registration(race.host.values, registry),
+        "relocation race preserves the external edit and original receipt, settings and exports");
+}
+
+void hook_rollback_checks(bool move) {
+    const GameHook first("return Def.ActorFrame {}\n-- test exporter release 1\n");
+    const GameHook latest("return Def.ActorFrame {}\n-- test exporter release 9\n");
+    HookUpgradeFixture stages(move ? "hook-move-rollback-count" : "hook-rollback-count");
+    stages.installer(first).apply({stages.game, true, true});
+    stages.seed();
+    if (move) {
+        stages.move_game();
+    }
+
+    auto initial_mutations = stages.host.mutations;
+    stages.installer(latest).apply({stages.game, true, true});
+    auto mutation_count = stages.host.mutations - initial_mutations;
+    check(
+        mutation_count > 6, "upgrade exercises hook, exports, settings, receipt and application transaction");
+
+    for (int stage = 1; stage <= mutation_count; ++stage) {
+        HookUpgradeFixture rollback(
+            (move ? "hook-move-rollback-" : "hook-rollback-") + std::to_string(stage));
+        rollback.installer(first).apply({rollback.game, true, true});
+        rollback.seed();
+        if (move) {
+            rollback.move_game();
+        }
+
+        auto before = snapshot_files(rollback.files.root);
+        auto registry = rollback.host.values;
+        rollback.host.fail_at = rollback.host.mutations + stage;
+        rejects(
+            [&] {
+                rollback.installer(latest).apply({rollback.game, true, true});
+            },
+            "injected failure at each upgrade mutation triggers rollback");
+        check(snapshot_files(rollback.files.root) == before &&
+                  same_registration(rollback.host.values, registry),
+            "every failed upgrade restores exporter, receipt, settings, exports, queue and registration");
+        rollback.host.fail_at = -1;
+        rollback.installer(latest).apply({rollback.game, true, true});
+        auto marker = parse(read(rollback.paths.app / L"installation.json"));
+        check(latest.current(GameHook::layer(rollback.game)) &&
+                  str(marker, L"hookSha256") == latest.fingerprint() &&
+                  str(marker, L"gameRoot") == utf8(rollback.game.wstring()),
+            "rolled-back installation remains usable for a successful retry");
+    }
+}
+
+void hook_upgrade_checks() {
+    const GameHook first("return Def.ActorFrame {}\n-- test exporter release 1\n");
+    const GameHook second("return Def.ActorFrame {}\n-- test exporter release 2\n");
+    const GameHook latest("return Def.ActorFrame {}\n-- test exporter release 9\n");
+    HookUpgradeFixture sequential("hook-sequential");
+    auto first_setup = sequential.installer(first);
+    auto second_setup = sequential.installer(second);
+    auto latest_setup = sequential.installer(latest);
+    first_setup.apply({sequential.game, true, true});
+    sequential.seed();
+
+    auto layer = GameHook::layer(sequential.game);
+    auto marker_path = sequential.paths.app / L"installation.json";
+    auto marker = parse(read(marker_path));
+    check(number(marker, L"schema") == 1 && str(marker, L"hookSha256") == first.fingerprint() &&
+              str(marker, L"gameRoot") == utf8(sequential.game.wstring()),
+        "installation records exact exporter fingerprint and its game folder");
+    check(!latest.owned(layer) && latest.owned(layer, first.fingerprint()) && !latest.current(layer),
+        "receipt recognizes arbitrary previous managed exporter without adding historical hashes");
+
+    auto queued = read(sequential.paths.state / L"uploads.json");
+    auto token = load_preferences(sequential.paths.state).protected_token;
+    sequential.host.running = true;
+    auto before_stops = sequential.host.stops;
+    auto before_files = snapshot_files(sequential.files.root);
+    rejects(
+        [&] {
+            second_setup.apply({sequential.game, true, true});
+        },
+        "exporter update requires the game to be closed");
+    check(sequential.host.stops == before_stops && snapshot_files(sequential.files.root) == before_files,
+        "game-running upgrade changes no files and does not stop companion");
+
+    sequential.host.running = false;
+    second_setup.apply({sequential.game, true, true});
+    check(second.current(layer) && str(parse(read(marker_path)), L"hookSha256") == second.fingerprint(),
+        "sequential update replaces old exporter and advances its receipt");
+    auto upgraded = load_preferences(sequential.paths.state);
+    check(upgraded.capture_after > 1 && upgraded.mix == "Phoenix2" && upgraded.protected_token == token &&
+              read(sequential.paths.state / L"uploads.json") == queued,
+        "exporter replacement resets cutoff while preserving account, settings and pending uploads");
+    check(!fs::exists(GameHook::exports(sequential.game) / L"current.json") &&
+              !fs::exists(GameHook::exports(sequential.game) / L"result.json") &&
+              read(GameHook::exports(sequential.game) / L"keep.txt") == "unrelated export file",
+        "exporter replacement clears only transient result and current-chart payloads");
+
+    sequential.seed();
+    latest_setup.apply({sequential.game, true, true});
+    check(latest.current(layer) && str(parse(read(marker_path)), L"hookSha256") == latest.fingerprint(),
+        "skipping arbitrary exporter releases updates through the installed receipt");
+
+    sequential.seed();
+    auto cutoff = load_preferences(sequential.paths.state).capture_after;
+    auto exports = GameHook::exports(sequential.game);
+    auto current = read(exports / L"current.json"), completed = read(exports / L"result.json");
+    auto timestamp = fs::file_time_type::clock::now() - std::chrono::hours(48);
+    fs::last_write_time(layer, timestamp);
+    sequential.host.running = true;
+    latest_setup.apply({sequential.game, true, false});
+    check(fs::last_write_time(layer) == timestamp &&
+              load_preferences(sequential.paths.state).capture_after == cutoff &&
+              read(exports / L"current.json") == current && read(exports / L"result.json") == completed,
+        "same exporter is not rewritten and component maintenance keeps payloads and cutoff");
+
+    auto root_with_separator = fs::path(sequential.game.wstring() + L"\\");
+    latest_setup.apply({root_with_separator, true, false});
+    check(latest.current(layer) && fs::last_write_time(layer) == timestamp &&
+              load_preferences(sequential.paths.state).capture_after == cutoff &&
+              read(exports / L"current.json") == current && read(exports / L"result.json") == completed,
+        "same game folder with trailing separator keeps current hook and payloads while game is running");
+
+    std::string crlf;
+    for (char character : latest.source()) {
+        crlf += character == '\n' ? "\r\n" : std::string(1, character);
+    }
+
+    atomic_write(layer, crlf);
+    fs::last_write_time(layer, timestamp);
+    latest_setup.apply({sequential.game, true, false});
+    check(latest.current(layer) && fs::last_write_time(layer) == timestamp &&
+              GameHook::fingerprint(crlf) == latest.fingerprint(),
+        "Windows line endings match the recorded exporter without a rewrite");
+    auto standalone_cr = std::string("return Def.ActorFrame {}\r-- test exporter release 9\n");
+    atomic_write(layer, standalone_cr);
+    check(!latest.owned(layer, latest.fingerprint()) &&
+              GameHook::fingerprint(standalone_cr) != latest.fingerprint(),
+        "standalone carriage returns cannot erase a meaningful exporter modification");
+
+    sequential.host.running = false;
+    atomic_write(layer, latest.source() + "-- modified by owner\n");
+    auto modified_files = snapshot_files(sequential.files.root);
+    before_stops = sequential.host.stops;
+    for (bool keep : {true, false}) {
+        rejects(
+            [&] {
+                latest_setup.apply({sequential.game, keep, false});
+            },
+            "modified managed exporter refuses both update and removal");
+    }
+
+    check(snapshot_files(sequential.files.root) == modified_files && sequential.host.stops == before_stops,
+        "modified-exporter refusal preserves files and leaves companion running");
+
+    atomic_write(layer, latest.source());
+    auto stale = parse(read(marker_path));
+    put(stale, L"hookSha256", first.fingerprint());
+    atomic_write(marker_path, encode(stale));
+    fs::last_write_time(layer, timestamp);
+    latest_setup.apply({sequential.game, true, false});
+    check(fs::last_write_time(layer) == timestamp &&
+              str(parse(read(marker_path)), L"hookSha256") == latest.fingerprint(),
+        "exact current exporter safely repairs a stale valid receipt without a rewrite");
+
+    auto other_game = sequential.files.game(L"other-game");
+    atomic_write(GameHook::layer(other_game), second.source());
+    before_stops = sequential.host.stops;
+    rejects(
+        [&] {
+            latest_setup.apply({other_game, true, false});
+        },
+        "relocation cannot authorize an exporter that differs from both the receipt and current source");
+    check(read(GameHook::layer(other_game)) == second.source() && sequential.host.stops == before_stops,
+        "unrecognized destination exporter leaves both connections untouched");
+    fs::remove(GameHook::layer(other_game));
+    latest_setup.apply({other_game, false, true});
+    check(!fs::exists(layer) && latest.current(GameHook::layer(other_game)) &&
+              !load_preferences(sequential.paths.state).sync &&
+              load_preferences(sequential.paths.state).overlay &&
+              str(parse(read(marker_path)), L"gameRoot") == utf8(other_game.wstring()),
+        "moving to overlay-only records the new receipt folder and preserves independent components");
+    latest_setup.apply({other_game, false, false});
+    check(!latest_setup.installed() && !fs::exists(GameHook::layer(other_game)),
+        "receipt-managed exporter supports full removal after moving components");
+
+    HookUpgradeFixture removal("hook-old-removal");
+    removal.installer(first).apply({removal.game, false, true});
+    removal.installer(latest).apply({removal.game, false, false});
+    check(!fs::exists(GameHook::layer(removal.game)) && !fs::exists(removal.paths.app / L"installation.json"),
+        "latest setup removes an unchanged older managed exporter through its receipt");
+
+    hook_receipt_checks();
+    hook_race_checks();
+    hook_relocation_checks();
+    hook_rollback_checks(false);
+    hook_rollback_checks(true);
 }
 
 std::string get(unsigned short port, const std::string& header) {
@@ -645,6 +1204,33 @@ void overlay_checks() {
     check(server.port() == 0, "overlay stops and releases its port");
     server.start(true, port);
     check(server.port() == port, "overlay can restart on released port");
+}
+
+bool icon_size(HICON icon, int width, int height) {
+    ICONINFO info{};
+    if (!GetIconInfo(icon, &info)) {
+        fail("Inspect icon");
+    }
+
+    BITMAP bitmap{};
+    bool valid = info.hbmColor && GetObjectW(info.hbmColor, sizeof(bitmap), &bitmap) &&
+                 bitmap.bmWidth == width && bitmap.bmHeight == height;
+    DeleteObject(info.hbmColor);
+    DeleteObject(info.hbmMask);
+    return valid;
+}
+
+void icon_checks() {
+    for (int resource : {IDI_APP, IDI_SETUP}) {
+        Icon icon;
+        bool valid = true;
+        for (int size : {16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 84, 96, 112, 128, 144, 192, 256}) {
+            icon.load(resource, size, size);
+            valid = valid && icon_size(icon.get(), size, size);
+        }
+
+        check(valid, "embedded app and setup icons load at tray, title and header sizes");
+    }
 }
 
 struct Preview {
@@ -908,6 +1494,14 @@ void view_checks() {
               control_text(transition.window, IDC_ROOT) == L"C:\\XSanity" &&
               IsDlgButtonChecked(transition.window, IDC_SYNC) == BST_CHECKED,
         "DPI changes rebuild fonts and preserve folder and component selection");
+    auto small_icon = reinterpret_cast<HICON>(SendMessageW(transition.window, WM_GETICON, ICON_SMALL, 0));
+    auto large_icon = reinterpret_cast<HICON>(SendMessageW(transition.window, WM_GETICON, ICON_BIG, 0));
+    check(
+        icon_size(
+            small_icon, GetSystemMetricsForDpi(SM_CXSMICON, 144), GetSystemMetricsForDpi(SM_CYSMICON, 144)) &&
+            icon_size(
+                large_icon, GetSystemMetricsForDpi(SM_CXICON, 144), GetSystemMetricsForDpi(SM_CYICON, 144)),
+        "DPI changes reload both setup title-bar icons at the new scale");
     auto output = executable().parent_path();
     CheckDlgButton(dialog, IDC_SYNC, BST_CHECKED);
     CheckDlgButton(dialog, IDC_OVERLAY, BST_UNCHECKED);
@@ -1079,9 +1673,11 @@ int wmain(int argc, wchar_t** argv) {
             return ipc_companion(argv[2]);
         }
 
+        icon_checks();
         engine_checks();
         api_checks();
         installer_checks();
+        hook_upgrade_checks();
         overlay_checks();
         ipc_checks();
         Fixture self("self-delete", true);
