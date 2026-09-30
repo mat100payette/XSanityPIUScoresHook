@@ -18,9 +18,11 @@ Describe what changed, why, and how it was tested in pull requests. Call out liv
 
 ## Release
 
-1. Update `VERSION` and build with `-Test -Package`.
-2. Check the installer, all component combinations, and a live gameplay/upload session before distributing a tested release. Sign both executables and the final installer when a signing certificate is available; regenerate its checksum after signing.
-3. Commit the version change, create a matching tag such as `v0.2.0`, and push it.
-4. The Release workflow builds, checks, and creates a draft release with the installer and SHA-256 checksum. Review its notes and publish when ready.
+1. Set `VERSION` to the version you want to release, then commit and push your changes.
+2. On GitHub, open **Actions → Release → Run workflow**, choose **main**, and click **Run workflow**.
+3. The workflow builds and checks the installer, creates the matching tag if needed, and prepares a draft release with the installer and SHA-256 checksum.
+4. Open **Releases**, review the draft, and publish when ready.
 
-Release automation does not change `VERSION` or commit on your behalf. The tag must match the version in its checked-out source.
+Check the installer, component combinations, and a live gameplay/upload session before distributing a tested release. Sign the executables and installer when a certificate is available; regenerate its checksum after signing.
+
+The workflow uses `VERSION` from the selected commit. It does not bump versions or commit changes. For another release, update `VERSION` first. An existing tag must point to that same commit. Pushing a matching version tag also triggers the workflow.
