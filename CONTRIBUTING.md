@@ -18,11 +18,13 @@ Describe what changed, why, and how it was tested in pull requests. Call out liv
 
 ## Release
 
-1. Set `VERSION` to the version you want to release, then commit and push your changes.
-2. On GitHub, open **Actions → Release → Run workflow**, choose **main**, and click **Run workflow**.
-3. The workflow builds and checks the installer, creates the matching tag if needed, and prepares a draft release with the installer and SHA-256 checksum.
-4. Open **Releases**, review the draft, and publish when ready.
+1. Commit and push the changes you want to release.
+2. On GitHub, open **Actions → Release → Run workflow**.
+3. Choose **main** and a version bump: **patch**, **minor**, or **major**.
+4. Click **Run workflow**. When it succeeds, the published release link appears in the run summary.
+
+The workflow bumps the latest `vX.Y.Z` tag, updates `VERSION`, builds and checks the installer, pushes the version commit and tag, and publishes the installer and SHA-256 checksum. The first release uses `VERSION` as-is. No manual version edit or publishing step is needed.
+
+Release logic lives in `scripts/prepare-release.ps1` (version commit and tag) and `scripts/publish-release.ps1` (push and publication); the workflow calls these around `scripts/build.ps1`.
 
 Check the installer, component combinations, and a live gameplay/upload session before distributing a tested release. Sign the executables and installer when a certificate is available; regenerate its checksum after signing.
-
-The workflow uses `VERSION` from the selected commit. It does not bump versions or commit changes. For another release, update `VERSION` first. An existing tag must point to that same commit. Pushing a matching version tag also triggers the workflow.

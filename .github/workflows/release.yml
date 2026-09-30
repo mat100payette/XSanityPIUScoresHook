@@ -2,8 +2,16 @@ name: Release
 
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
+    inputs:
+      bump:
+        description: Version bump to release
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -13,45 +21,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  draft:
-    name: Check and prepare draft release
+  release:
+    name: Build and publish release
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          persist-credentials: false
-      - name: Resolve release tag
+
+      - name: Resolve version
         id: version
         shell: pwsh
-        run: |
-          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
-          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
-            throw 'VERSION must be a three-part numeric version.'
-          }
-          $tag = "v$version"
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_NAME -ne $tag) {
-            throw 'Release tag must match VERSION.'
-          }
-          $existing = git tag --list $tag
-          if ($LASTEXITCODE -ne 0) { throw 'Could not check existing tags.' }
-          if ($existing) {
-            $commit = git rev-parse "$tag^{commit}"
-            if ($LASTEXITCODE -ne 0 -or $commit -ne $env:GITHUB_SHA) {
-              throw "Tag $tag already points to another commit. Update VERSION before releasing."
-            }
-          }
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        env:
+          VERSION_BUMP: ${{ inputs.bump }}
+        run: .\scripts\prepare-release.ps1 -Bump "$env:VERSION_BUMP"
+
       - name: Build and check
         shell: pwsh
         run: .\scripts\build.ps1 -Test -Package
-      - name: Create draft release
+
+      - name: Publish release
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          $assets = @(Get-ChildItem -LiteralPath artifacts -File | ForEach-Object { $_.FullName })
-          gh release create $env:RELEASE_TAG @assets --target $env:GITHUB_SHA --draft --generate-notes --title "XSanity PIU Scores Hook $env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed.' }
+        run: .\scripts\publish-release.ps1 -Tag "$env:RELEASE_TAG" -Branch "$env:GITHUB_REF_NAME"

@@ -89,6 +89,6 @@ scripts/      One build/check/package command
 tests/        Fake API/game/installation checks and installer preview
 ```
 
-Generated outputs stay outside Git. CI runs the same checks. To prepare a **draft release** on GitHub, open **Actions → Release → Run workflow**. It uses `VERSION`, creates the matching tag if needed, and attaches the installer and checksum. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [LICENSE](LICENSE).
+Generated outputs stay outside Git. CI runs the same checks. To publish a release on GitHub, open **Actions → Release → Run workflow**, choose **patch**, **minor**, or **major**, and run it. The workflow handles versioning and publishes the installer and checksum. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [LICENSE](LICENSE).
 
 **Verification:** automated checks use fake game folders, account data, and installation registration. Live gameplay capture and authenticated uploads still need a real session. These local builds are unsigned.
