@@ -3,6 +3,8 @@
 - Keep this a small Windows tray companion with a per-user installer. Build with `scripts/build.ps1`.
 - Keep user documentation focused on behavior, installation, and usage. Include implementation details only where they help contributors; do not promote the absence of runtimes or frameworks.
 - Use C++20, Windows APIs, and the static MSVC runtime. Preserve `.editorconfig` formatting and persisted settings/queue compatibility.
+- Follow `.clang-format`; run `scripts/format.ps1 -Check` after C++ changes. Keep statements on separate lines, separate logical steps with blank lines, and use named helpers for substantial callbacks or repeated operations.
+- Leave one blank line after a completed control-flow block when another statement follows at the same level. Keep `else`, `catch`, and `do/while` clauses together; do not add spacing immediately before an enclosing closing brace.
 - Automatic PB syncing and the OBS overlay are independent installer components. Overlay is unchecked on a fresh installation. Overlay-only mode must never capture or upload results; syncing-only mode must never open the overlay listener.
 - Reopening setup must support adding/removing either component or both. Keep the shared game exporter while either component needs it. Removal must preserve unrelated files and refuse modified/conflicting game layers. Use per-user registration and shortcuts, with rollback on setup errors.
 - The OBS overlay contains exactly current song, difficulty, and PIU Scores PB.

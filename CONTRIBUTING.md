@@ -10,6 +10,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Test -P
 
 Install Visual Studio Build Tools with **Desktop development with C++**, the MSVC x64 tools, and Windows SDK. The build uses C++20. Warnings fail the build. Follow `.editorconfig`; behavioral checks in `tests/checks.cpp` use disposable game folders, a fake API, and fake installation registration. Installer checks cover native accessibility, mouse/keyboard input, display scaling, scrolling, and themed screen previews.
 
+C++ style is defined in `.clang-format`: four spaces, expanded control flow, and a 110-column limit. Leave one blank line after a completed control-flow block before the next statement. Clang-format preserves this spacing but does not insert it automatically. The workspace formats C++ on save. Run `.\scripts\format.ps1` to format all sources, or `.\scripts\format.ps1 -Check` to check them. The script uses clang-format on PATH or the copy bundled with the recommended VS Code C/C++ extension; clang-format 15 or newer is required.
+
 The engine's mutex protects state shared by export polling, syncing, and the UI. Keep network requests outside that lock. Settings and pending-upload fields are persisted; preserve compatibility when changing them. Installer tests must never use real game folders, account tokens, Start menu shortcuts, or uninstall registration.
 
 The overlay contains only current song, difficulty, and website PB. PIU Scores owns PBs; XSanity provides transient exports. Keep overlay-only mode read-only and syncing-only mode free of a local listener. Setup must preserve existing game files and refuse conflicting theme layers.

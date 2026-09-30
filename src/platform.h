@@ -21,16 +21,33 @@ namespace json = winrt::Windows::Data::Json;
 using Object = json::JsonObject;
 using Array = json::JsonArray;
 using Value = json::JsonValue;
-class Error : public std::runtime_error { public: using std::runtime_error::runtime_error; };
+
+class Error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class Handle {
     HANDLE value_ = nullptr;
+
 public:
-    explicit Handle(HANDLE value = nullptr) : value_(value) {}
-    ~Handle() { if (value_ && value_ != INVALID_HANDLE_VALUE) CloseHandle(value_); }
+    explicit Handle(HANDLE value = nullptr) : value_(value) {
+    }
+
+    ~Handle() {
+        if (value_ && value_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(value_);
+        }
+    }
+
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
-    HANDLE get() const { return value_; }
+
+    HANDLE get() const {
+        return value_;
+    }
 };
+
 std::wstring wide(std::string_view text);
 std::string utf8(std::wstring_view text);
 [[noreturn]] void fail(const char* operation);
@@ -60,10 +77,14 @@ bool flag(const Object& object, std::wstring_view key, bool fallback = false);
 void put(Object& object, std::wstring_view key, std::string_view text);
 void put(Object& object, std::wstring_view key, int value);
 void put(Object& object, std::wstring_view key, bool value);
-inline void put(Object& object, std::wstring_view key, const char* text) { put(object, key, std::string_view(text)); }
+
+inline void put(Object& object, std::wstring_view key, const char* text) {
+    put(object, key, std::string_view(text));
+}
+
 inline constexpr wchar_t AppMutex[] = L"Local\\PIUCompanion";
 inline constexpr wchar_t StopEvent[] = L"Local\\XSanityPIUScoresHook.Stop";
 inline constexpr wchar_t WindowClass[] = L"XSanityPIUScoresHook.Tray";
 inline constexpr UINT LaunchGameMessage = WM_APP + 1;
 inline constexpr int HookResource = 101, OverlayResource = 102, AppResource = 103;
-}
+} // namespace piu

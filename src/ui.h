@@ -25,12 +25,28 @@
 #ifndef RC_INVOKED
 namespace piu {
 inline std::wstring control_text(HWND dialog, int id) {
-    auto control = GetDlgItem(dialog, id); int length = GetWindowTextLengthW(control);
-    std::wstring value(static_cast<size_t>(length) + 1, L'\0'); GetWindowTextW(control, value.data(), length + 1); value.resize(static_cast<size_t>(length)); return value;
+    auto control = GetDlgItem(dialog, id);
+    int length = GetWindowTextLengthW(control);
+    std::wstring value(static_cast<size_t>(length) + 1, L'\0');
+    GetWindowTextW(control, value.data(), length + 1);
+    value.resize(static_cast<size_t>(length));
+    return value;
 }
-inline void show_error(HWND owner, const std::string& message) { MessageBoxW(owner, wide(message).c_str(), L"PIU Companion", MB_OK | MB_ICONERROR); }
+
+inline void show_error(HWND owner, const std::string& message) {
+    MessageBoxW(owner, wide(message).c_str(), L"PIU Companion", MB_OK | MB_ICONERROR);
+}
+
 inline std::string exception_message() {
-    try { throw; } catch (const std::exception& error) { return error.what(); } catch (const winrt::hresult_error& error) { return utf8(error.message().c_str()); } catch (...) { return "An unexpected Windows error occurred."; }
+    try {
+        throw;
+    } catch (const std::exception& error) {
+        return error.what();
+    } catch (const winrt::hresult_error& error) {
+        return utf8(error.message().c_str());
+    } catch (...) {
+        return "An unexpected Windows error occurred.";
+    }
 }
-}
+} // namespace piu
 #endif

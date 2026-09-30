@@ -12,7 +12,12 @@ class SetupView {
         COLORREF background, panel, text, muted, border, accent, accent_text, selected, hover, danger;
         bool dark = false, contrast = false;
     } theme_{};
-    struct Interaction { int id; bool hot = false; };
+
+    struct Interaction {
+        int id;
+        bool hot = false;
+    };
+
     HWND window_ = nullptr;
     SetupAppearance appearance_ = SetupAppearance::System;
     UINT dpi_ = 96;
@@ -21,7 +26,8 @@ class SetupView {
     RECT input_{}, progress_{};
     int content_height_ = 0, viewport_height_ = 0, scroll_ = 0, progress_value_ = 0;
     bool working_ = false, completed_ = false, failed_ = false, removing_ = false;
-    std::array<Interaction, 7> interactions_{{{IDC_SYNC}, {IDC_OVERLAY}, {IDC_LAUNCH}, {IDC_BROWSE}, {IDC_APPLY}, {IDCANCEL}, {IDC_ROOT}}};
+    std::array<Interaction, 7> interactions_{
+        {{IDC_SYNC}, {IDC_OVERLAY}, {IDC_LAUNCH}, {IDC_BROWSE}, {IDC_APPLY}, {IDCANCEL}, {IDC_ROOT}}};
 
     int scale(int value) const;
     void theme();
@@ -32,6 +38,7 @@ class SetupView {
     void paint(HDC dc);
     void paint_control(HWND control, HDC dc);
     static LRESULT CALLBACK control_proc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+
 public:
     SetupView() = default;
     ~SetupView();
@@ -45,4 +52,4 @@ public:
     void finish(bool keep);
     void failure();
 };
-}
+} // namespace piu
