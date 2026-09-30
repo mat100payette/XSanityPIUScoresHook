@@ -39,6 +39,7 @@ class SetupView {
     void layout(const RECT* suggested = nullptr);
     void scroll_to(int position);
     void reveal(HWND control);
+    void paint_buffered(HWND control, HDC dc);
     void paint(HDC dc);
     void paint_control(HWND control, HDC dc);
     static LRESULT CALLBACK control_proc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);

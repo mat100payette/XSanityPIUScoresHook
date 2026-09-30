@@ -1357,7 +1357,89 @@ struct Preview {
     }
 };
 
+void view_repaint_checks() {
+    struct Messages {
+        int layouts = 0, enables = 0;
+
+        static LRESULT CALLBACK observe(
+            HWND window, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data) {
+            auto counts = reinterpret_cast<Messages*>(data);
+            if (message == WM_WINDOWPOSCHANGING) {
+                ++counts->layouts;
+            } else if (message == WM_ENABLE) {
+                ++counts->enables;
+            }
+
+            return DefSubclassProc(window, message, wparam, lparam);
+        }
+    };
+
+    for (auto appearance : {SetupAppearance::Dark, SetupAppearance::Light, SetupAppearance::Contrast}) {
+        Preview preview(appearance);
+        auto dialog = preview.window;
+        auto browse = GetDlgItem(dialog, IDC_BROWSE);
+        Messages counts;
+        SetWindowSubclass(dialog, Messages::observe, 2, reinterpret_cast<DWORD_PTR>(&counts));
+        SetWindowSubclass(browse, Messages::observe, 2, reinterpret_cast<DWORD_PTR>(&counts));
+        for (int id : {IDC_OVERLAY, IDC_SYNC, IDC_LAUNCH}) {
+            SendDlgItemMessageW(dialog, id, BM_CLICK, 0, 0);
+            preview.view.refresh(false);
+            SendDlgItemMessageW(dialog, id, BM_CLICK, 0, 0);
+            preview.view.refresh(false);
+        }
+
+        // Sync toggles disable Browse when no components remain; overlay/launch do not.
+        check(counts.layouts == 0 && counts.enables == 2 && IsWindowEnabled(browse),
+            "checkbox changes avoid relayout and only change Browse availability when necessary");
+        check((GetWindowLongPtrW(dialog, GWL_STYLE) & WS_CLIPCHILDREN) != 0,
+            "dialog background redraws exclude child controls");
+        RemoveWindowSubclass(browse, Messages::observe, 2);
+        RemoveWindowSubclass(dialog, Messages::observe, 2);
+
+        RECT rect{};
+        GetClientRect(browse, &rect);
+        auto screen = GetDC(browse);
+        auto memory = CreateCompatibleDC(screen);
+        auto bitmap = CreateCompatibleBitmap(screen, rect.right, rect.bottom);
+        auto old = SelectObject(memory, bitmap);
+        auto sentinel = RGB(201, 17, 163);
+        SetPixelV(memory, 12, 8, sentinel);
+        NMCUSTOMDRAW draw{};
+        draw.hdr = {browse, IDC_BROWSE, NM_CUSTOMDRAW};
+        draw.hdc = memory;
+        draw.rc = rect;
+        draw.dwDrawStage = CDDS_PREERASE;
+        SendMessageW(dialog, WM_NOTIFY, IDC_BROWSE, reinterpret_cast<LPARAM>(&draw));
+        check(GetWindowLongPtrW(dialog, DWLP_MSGRESULT) == CDRF_SKIPDEFAULT &&
+                  GetPixel(memory, 12, 8) == sentinel,
+            "native button erase notifications cannot flash the system background");
+        draw.dwDrawStage = CDDS_PREPAINT;
+        SendMessageW(dialog, WM_NOTIFY, IDC_BROWSE, reinterpret_cast<LPARAM>(&draw));
+        auto panel = appearance == SetupAppearance::Dark    ? RGB(24, 34, 47)
+                     : appearance == SetupAppearance::Light ? RGB(255, 255, 255)
+                                                            : GetSysColor(COLOR_WINDOW);
+        check(
+            GetWindowLongPtrW(dialog, DWLP_MSGRESULT) == CDRF_SKIPDEFAULT && GetPixel(memory, 12, 8) == panel,
+            "native button state redraws use the styled palette in each appearance");
+
+        auto apply = GetDlgItem(dialog, IDC_APPLY);
+        RECT ready{}, finished{}, restored{};
+        GetWindowRect(apply, &ready);
+        preview.view.finish(true);
+        GetWindowRect(apply, &finished);
+        preview.view.refresh(true);
+        GetWindowRect(apply, &restored);
+        check(ready.left != finished.left && EqualRect(&ready, &restored),
+            "editing after completion restores the action-row layout");
+        SelectObject(memory, old);
+        DeleteObject(bitmap);
+        DeleteDC(memory);
+        ReleaseDC(browse, screen);
+    }
+}
+
 void view_checks() {
+    view_repaint_checks();
     Preview preview(SetupAppearance::Dark);
     auto dialog = preview.window;
     check(IsDlgButtonChecked(dialog, IDC_SYNC) == BST_CHECKED &&

@@ -34,6 +34,19 @@ int text_height(HWND window, HFONT font, std::wstring_view label, int width) {
     return rect.bottom;
 }
 
+void enable_control(HWND window, int id, bool enabled) {
+    auto control = GetDlgItem(window, id);
+    if ((IsWindowEnabled(control) != FALSE) != enabled) {
+        EnableWindow(control, enabled);
+    }
+}
+
+void set_caption(HWND window, int id, std::wstring_view caption) {
+    if (control_text(window, id) != caption) {
+        SetDlgItemTextW(window, id, std::wstring(caption).c_str());
+    }
+}
+
 constexpr wchar_t SyncDescription[] = L"Automatically upload new personal bests to PIU Scores.";
 constexpr wchar_t OverlayDescription[] = L"Current song, difficulty and your website PB in OBS.";
 } // namespace
@@ -355,6 +368,40 @@ void SetupView::initialize(HWND window, SetupAppearance appearance, UINT dpi) {
     layout();
 }
 
+void SetupView::paint_buffered(HWND control, HDC dc) {
+    RECT client{};
+    GetClientRect(control, &client);
+    if (client.right <= 0 || client.bottom <= 0) {
+        return;
+    }
+
+    auto draw = [&](HDC target) {
+        if (control == window_) {
+            paint(target);
+        } else {
+            paint_control(control, target);
+        }
+    };
+    auto memory = CreateCompatibleDC(dc);
+    auto bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
+    if (memory && bitmap) {
+        auto old = SelectObject(memory, bitmap);
+        draw(memory);
+        BitBlt(dc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+        SelectObject(memory, old);
+    } else {
+        draw(dc);
+    }
+
+    if (bitmap) {
+        DeleteObject(bitmap);
+    }
+
+    if (memory) {
+        DeleteDC(memory);
+    }
+}
+
 void SetupView::paint(HDC dc) {
     RECT client{};
     GetClientRect(window_, &client);
@@ -521,7 +568,7 @@ LRESULT CALLBACK SetupView::control_proc(
     if (id != IDC_ROOT && (message == WM_PAINT || message == WM_PRINTCLIENT)) {
         PAINTSTRUCT paint{};
         HDC dc = message == WM_PAINT ? BeginPaint(control, &paint) : reinterpret_cast<HDC>(wparam);
-        view->paint_control(control, dc);
+        view->paint_buffered(control, dc);
         if (message == WM_PAINT) {
             EndPaint(control, &paint);
         }
@@ -575,16 +622,7 @@ std::optional<INT_PTR> SetupView::message(UINT message, WPARAM wparam, LPARAM lp
     if (message == WM_PAINT) {
         PAINTSTRUCT info{};
         auto dc = BeginPaint(window_, &info);
-        RECT client{};
-        GetClientRect(window_, &client);
-        auto memory = CreateCompatibleDC(dc);
-        auto bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
-        auto old = SelectObject(memory, bitmap);
-        paint(memory);
-        BitBlt(dc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
-        SelectObject(memory, old);
-        DeleteObject(bitmap);
-        DeleteDC(memory);
+        paint_buffered(window_, dc);
         EndPaint(window_, &info);
         return TRUE;
     }
@@ -592,6 +630,23 @@ std::optional<INT_PTR> SetupView::message(UINT message, WPARAM wparam, LPARAM lp
     if (message == WM_PRINTCLIENT) {
         paint(reinterpret_cast<HDC>(wparam));
         return TRUE;
+    }
+
+    if (message == WM_NOTIFY && lparam) {
+        auto draw = reinterpret_cast<NMCUSTOMDRAW*>(lparam);
+        bool button = draw->hdr.code == NM_CUSTOMDRAW &&
+                      std::any_of(interactions_.begin(), interactions_.end(), [&](const auto& item) {
+                          return item.id != IDC_ROOT && GetDlgItem(window_, item.id) == draw->hdr.hwndFrom;
+                      });
+        if (button && (draw->dwDrawStage == CDDS_PREERASE || draw->dwDrawStage == CDDS_PREPAINT)) {
+            // Native buttons can draw immediately during state changes, outside WM_PAINT.
+            if (draw->dwDrawStage == CDDS_PREPAINT) {
+                paint_buffered(draw->hdr.hwndFrom, draw->hdc);
+            }
+
+            SetWindowLongPtrW(window_, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
+            return TRUE;
+        }
     }
 
     if (message == WM_CTLCOLORDLG) {
@@ -671,36 +726,45 @@ std::optional<INT_PTR> SetupView::message(UINT message, WPARAM wparam, LPARAM lp
 void SetupView::refresh(bool installed, bool discards_pending) {
     bool keep = IsDlgButtonChecked(window_, IDC_SYNC) == BST_CHECKED ||
                 IsDlgButtonChecked(window_, IDC_OVERLAY) == BST_CHECKED;
+    bool relayout = completed_;
     working_ = completed_ = failed_ = false;
     removing_ = !keep && installed;
     progress_value_ = 0;
     for (int id : {IDC_SYNC, IDC_OVERLAY, IDCANCEL}) {
-        EnableWindow(GetDlgItem(window_, id), TRUE);
+        enable_control(window_, id, true);
     }
 
     for (int id : {IDC_ROOT, IDC_BROWSE, IDC_LAUNCH}) {
-        EnableWindow(GetDlgItem(window_, id), keep);
+        enable_control(window_, id, keep);
     }
 
-    ShowWindow(GetDlgItem(window_, IDCANCEL), SW_SHOW);
-    SetDlgItemTextW(window_,
+    auto cancel = GetDlgItem(window_, IDCANCEL);
+    if (!(GetWindowLongPtrW(cancel, GWL_STYLE) & WS_VISIBLE)) {
+        ShowWindow(cancel, SW_SHOW);
+    }
+
+    set_caption(window_,
         IDC_INTRO,
         installed ? L"Add, change or remove your installed components."
                   : L"Your personal bests, connected to PIU Scores.");
-    SetDlgItemTextW(
-        window_, IDC_APPLY, keep ? (installed ? L"&Apply changes" : L"&Install") : L"&Remove all");
-    EnableWindow(GetDlgItem(window_, IDC_APPLY), keep || installed);
-    SetDlgItemTextW(window_,
+    set_caption(window_, IDC_APPLY, keep ? (installed ? L"&Apply changes" : L"&Install") : L"&Remove all");
+    enable_control(window_, IDC_APPLY, keep || installed);
+    set_caption(window_,
         IDC_STATUS,
         removing_ ? L"Ready to remove" : (installed ? L"Ready to apply changes" : L"Ready to install"));
-    SetDlgItemTextW(window_,
+    set_caption(window_,
         IDC_DETAILS,
         !keep ? (installed ? L"Both components and your saved account data will be removed."
                            : L"Choose at least one component to continue.")
               : (discards_pending ? L"Removing PB syncing discards pending uploads. Your account settings "
                                     L"stay with the overlay."
                                   : L"You can add or remove either component anytime by reopening setup."));
-    layout();
+    if (relayout) {
+        layout();
+    } else {
+        InvalidateRect(window_, nullptr, FALSE);
+        InvalidateRect(GetDlgItem(window_, IDC_APPLY), nullptr, FALSE);
+    }
 }
 
 void SetupView::working(bool removing, bool installed) {
