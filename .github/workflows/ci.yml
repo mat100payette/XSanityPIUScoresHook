@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build, check, and package
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build and check
+        shell: pwsh
+        run: .\scripts\build.ps1 -Test -Package
+      - name: Upload installer and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: XSanityPIUScoresHook-win-x64
+          path: artifacts/*
+          if-no-files-found: error

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#121c29"/>
+  <g fill="#24dccd">
+    <path id="arrow" d="M55 55H97V69H81L100 88L88 100L69 81V97H55Z"/>
+    <use href="#arrow" transform="rotate(90 128 128)"/>
+    <use href="#arrow" transform="rotate(180 128 128)"/>
+    <use href="#arrow" transform="rotate(270 128 128)"/>
+    <path d="M128 102L154 128L128 154L102 128Z"/>
+  </g>
+</svg>

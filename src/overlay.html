@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PIU Companion</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: transparent;
+            color: #fff;
+            font: 600 24px 'Segoe UI', sans-serif;
+        }
+        main {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            padding: 16px 22px;
+            background: #121923ed;
+            border-radius: 10px;
+            width: 700px;
+            min-height: 85px;
+        }
+        main[hidden] { display: none; }
+        #song {
+            flex: 1;
+            min-width: 0;
+            line-height: 1.2;
+            overflow-wrap: anywhere;
+        }
+        #difficulty { color: #ffbc80; font-size: 25px; white-space: nowrap; }
+        #pb { white-space: nowrap; font-size: 24px; }
+        #pb small { font-size: 13px; color: #aebdcb; margin-right: 8px; }
+    </style>
+</head>
+<body>
+    <main id="card" hidden>
+        <span id="song"></span>
+        <span id="difficulty"></span>
+        <span id="pb"><small>PB</small><span id="score">—</span></span>
+    </main>
+    <script>
+        'use strict';
+
+        const card = document.getElementById('card');
+        const song = document.getElementById('song');
+        const difficulty = document.getElementById('difficulty');
+        const score = document.getElementById('score');
+        let busy = false;
+
+        async function update() {
+            if (busy) return;
+            busy = true;
+            try {
+                const response = await fetch('/state', { cache: 'no-store' });
+                if (!response.ok) throw new Error('Overlay unavailable');
+                const state = await response.json();
+                card.hidden = !state.playing;
+                song.textContent = state.song || '';
+                difficulty.textContent = state.difficulty || '';
+                score.textContent = state.pb == null ? '—' : Number(state.pb).toLocaleString('en-US');
+            } catch {
+                card.hidden = true;
+            } finally {
+                busy = false;
+            }
+        }
+
+        update();
+        setInterval(update, 300);
+    </script>
+</body>
+</html>

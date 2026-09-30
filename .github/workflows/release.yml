@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    name: Check and prepare draft release
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify version tag
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw 'Release tag must match VERSION.'
+          }
+      - name: Build and check
+        shell: pwsh
+        run: .\scripts\build.ps1 -Test -Package
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath artifacts -File | ForEach-Object { $_.FullName })
+          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --draft --generate-notes --title "XSanity PIU Scores Hook $env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed.' }

@@ -1,0 +1,8 @@
+build/
+dist/
+artifacts/
+settings.json
+uploads.json
+*.tmp
+*.pdb
+*.log

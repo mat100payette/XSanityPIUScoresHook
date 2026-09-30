@@ -1,0 +1,14 @@
+# Project scope
+
+- Keep this a small Windows tray companion with a per-user installer. Build with `scripts/build.ps1`.
+- Keep user documentation focused on behavior, installation, and usage. Include implementation details only where they help contributors; do not promote the absence of runtimes or frameworks.
+- Use C++20, Windows APIs, and the static MSVC runtime. Preserve `.editorconfig` formatting and persisted settings/queue compatibility.
+- Automatic PB syncing and the OBS overlay are independent installer components. Overlay is unchecked on a fresh installation. Overlay-only mode must never capture or upload results; syncing-only mode must never open the overlay listener.
+- Reopening setup must support adding/removing either component or both. Keep the shared game exporter while either component needs it. Removal must preserve unrelated files and refuse modified/conflicting game layers. Use per-user registration and shortcuts, with rollback on setup errors.
+- The OBS overlay contains exactly current song, difficulty, and PIU Scores PB.
+- PIU Scores is the authoritative PB store. Use XSanity only for transient current-chart and completed-result exports; never read its score history or display a local PB as a website PB.
+- Hook setup adds only its export layer and `Save/PiuCompanion`. Accept identical hooks and refuse to overwrite conflicting theme layers or other game files.
+- Pending score payloads are temporary; remove them when accepted, covered, or skipped. Receipts prevent duplicate submission. Encrypt tokens for the Windows user and exclude private data and generated outputs from Git and packages.
+- Keep installer styling consistent in light, dark, and high-contrast modes. Preserve native keyboard and accessibility behavior; verify UI changes with rendered previews and display-scaling checks.
+- Run behavioral checks for code changes. Tests use fake game folders and a fake API. Treat live gameplay/API verification as outstanding until observed; do not submit real plays as a test without authorization.
+- Keep personal streaming and equipment notes outside this repository. Do not commit, push, or publish unless the user requests it.
