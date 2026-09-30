@@ -79,7 +79,7 @@ artifacts/XSanityPIUScoresHook-v0.2.0-win-x64-setup.exe
 artifacts/XSanityPIUScoresHook-v0.2.0-win-x64-setup.exe.sha256
 ```
 
-Share the versioned installer. `VERSION` supplies executable and package versions. Omit switches for a build alone; use `-Configuration Debug` for `dist/Debug`. VS Code tasks provide **Build**, **Check**, and **Package**.
+Share the versioned installer. `VERSION` supplies executable and package versions. Omit switches for a build alone; use `-Configuration Debug` for `dist/Debug`. Open [XSanityPIUScoresHook.code-workspace](XSanityPIUScoresHook.code-workspace) in VS Code for C++20 editor settings and the **Build**, **Check**, and **Package** tasks.
 
 ```text
 src/          Companion, API client, syncing, Win32 UI and overlay
