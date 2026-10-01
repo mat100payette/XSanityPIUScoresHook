@@ -18,6 +18,7 @@ bool same_profile(std::string_view left, std::string_view right) {
 
 Preferences load_preferences(const fs::path& folder) {
     Preferences config;
+    config.screenshots.folder = folder / L"Screenshots";
     if (!fs::exists(folder / L"settings.json")) {
         return config;
     }
@@ -33,13 +34,20 @@ Preferences load_preferences(const fs::path& folder) {
 
         for (uint32_t i = 0; i < accounts.Size(); ++i) {
             auto account = accounts.GetAt(i).GetObject();
-            config.accounts[i] = {str(account, L"Profile"), str(account, L"ProtectedToken")};
+            config.accounts[i] = {
+                str(account, L"Profile"), str(account, L"ProtectedToken"), flag(account, L"IncludeFailed")};
         }
     } else {
         // Preserve the existing account; require its game profile before capturing new plays.
         config.accounts[0].protected_token = str(data, L"ProtectedToken");
     }
 
+    config.screenshots.enabled = flag(data, L"ScreenshotsEnabled");
+    config.screenshots.folder =
+        wide(str(data, L"ScreenshotFolder", utf8(config.screenshots.folder.wstring())));
+    if (config.screenshots.folder.empty()) {
+        config.screenshots.folder = folder / L"Screenshots";
+    }
     config.game_root = wide(str(data, L"GameRoot"));
     config.sync = flag(data, L"SyncEnabled", true);
     config.overlay = flag(data, L"OverlayEnabled", false);
@@ -56,6 +64,7 @@ void save_preferences(const fs::path& folder, const Preferences& config) {
         Object row;
         put(row, L"Profile", account.profile);
         put(row, L"ProtectedToken", account.protected_token);
+        put(row, L"IncludeFailed", account.include_failed);
         accounts.Append(row);
     }
 
@@ -64,6 +73,8 @@ void save_preferences(const fs::path& folder, const Preferences& config) {
     put(data, L"SyncEnabled", config.sync);
     put(data, L"OverlayEnabled", config.overlay);
     put(data, L"CaptureAfter", std::to_string(config.capture_after));
+    put(data, L"ScreenshotsEnabled", config.screenshots.enabled);
+    put(data, L"ScreenshotFolder", utf8(config.screenshots.folder.wstring()));
     atomic_write(folder / L"settings.json", encode(data));
 }
 

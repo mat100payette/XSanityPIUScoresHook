@@ -67,6 +67,7 @@ void Engine::load() {
     std::lock_guard lock(gate_);
     config_ = load_preferences(folder_);
     data_ = config_.sync ? load_store(folder_) : Store{};
+    screenshots_.load(data_, config_.sync && config_.screenshots.enabled);
     for (size_t i = 0; i < tokens_.size(); ++i) {
         try {
             tokens_[i] = unprotect(config_.accounts[i].protected_token);
@@ -95,8 +96,7 @@ std::string Engine::status(uint64_t clock) const {
     std::lock_guard lock(gate_);
     for (size_t i = 0; i < tokens_.size(); ++i) {
         if (config_.sync && !tokens_[i].empty() && config_.accounts[i].profile.empty()) {
-            return "Add the XSanity profile name for Account " + std::to_string(i + 1) +
-                   " in Account settings.";
+            return "Add the XSanity profile name for Account " + std::to_string(i + 1) + " in Settings.";
         }
     }
 
@@ -116,7 +116,8 @@ std::string Engine::status(uint64_t clock) const {
         }
     }
 
-    return status_;
+    auto screenshot_error = screenshots_.error();
+    return screenshot_error.empty() ? status_ : status_ + " " + screenshot_error;
 }
 
 int Engine::account_for(const std::string& profile) const {
@@ -170,7 +171,9 @@ std::string Engine::player_status(uint64_t clock) const {
     return text;
 }
 
-void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::string& mix) {
+void Engine::configure(const std::array<AccountInput, 2>& accounts,
+    const std::string& mix,
+    std::optional<ScreenshotOptions> screenshots) {
     validate_mix(mix);
     auto inputs = accounts;
     for (auto& account : inputs) {
@@ -196,6 +199,15 @@ void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::s
     auto next = config_;
     next.mix = mix;
     bool changed = mix != config_.mix;
+    if (screenshots) {
+        if (screenshots->folder.empty()) {
+            screenshots->folder = folder_ / L"Screenshots";
+        }
+        validate_screenshot_folder(screenshots->folder, config_.game_root, folder_ / L"pending-shots");
+        changed |= screenshots->enabled != config_.screenshots.enabled ||
+                   screenshots->folder != config_.screenshots.folder;
+        next.screenshots = *screenshots;
+    }
     for (size_t i = 0; i < inputs.size(); ++i) {
         const auto& input = inputs[i];
         if ((config_.sync && !input.token.empty() && input.profile.empty()) ||
@@ -214,9 +226,10 @@ void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::s
                 " has pending uploads. Finish or discard them before changing its profile, key, or mix.");
         }
 
-        changed |= account_changed;
+        changed |= account_changed || input.include_failed != config_.accounts[i].include_failed;
         next.accounts[i] = {input.profile,
-            input.token == tokens_[i] ? config_.accounts[i].protected_token : protect(input.token)};
+            input.token == tokens_[i] ? config_.accounts[i].protected_token : protect(input.token),
+            input.include_failed};
     }
 
     if (!changed) {
@@ -226,6 +239,7 @@ void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::s
     next.capture_after = now();
     save_preferences(folder_, next);
     config_ = std::move(next);
+    screenshots_.configure(config_.screenshots);
     for (size_t i = 0; i < inputs.size(); ++i) {
         tokens_[i] = inputs[i].token;
         best_[i].clear();
@@ -237,7 +251,7 @@ void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::s
     catalog_.clear();
     playing_ = false;
     sync_due_ = true;
-    status_ = "Account settings saved.";
+    status_ = "Settings saved.";
     wake_.notify_all();
 }
 
@@ -275,6 +289,9 @@ void Engine::capture(const Result& result, uint64_t written) {
         data_.receipts[result.id] = skipped.code;
         feedback_.update(result.id, skipped.code);
         status_ = skipped.message;
+    } else if (result.broken && !config_.accounts[account].include_failed) {
+        data_.receipts[result.id] = "failed_disabled";
+        feedback_.update(result.id, "failed_disabled");
     } else {
         data_.pending.push_back({result, config_.mix, iso_time(written), "queued", account});
         feedback_.update(result.id, "checking");
@@ -326,6 +343,7 @@ void Engine::discard_pending(size_t account) {
     for (const auto& item : data_.pending) {
         if (item.account == static_cast<int>(account)) {
             feedback_.update(item.result.id, "discarded");
+            screenshots_.decide(item.result.id, false);
         }
     }
 
@@ -371,6 +389,7 @@ void Engine::poll() {
         }
     }
 
+    bool screenshot_updated = false;
     if (config.sync && (packet.HasKey(L"results") || packet.HasKey(L"result"))) {
         auto completed = packet.GetNamedNumber(L"completed");
         auto age = frame->clock - completed;
@@ -396,15 +415,54 @@ void Engine::poll() {
                         }
                     }
 
+                    prepare_screenshots(completed_results, frame->observed - elapsed);
                     for (const auto& result : completed_results) {
                         capture(result, frame->observed - elapsed);
                     }
+                    screenshots_.update(config.game_root,
+                        completed_results,
+                        str(packet, L"screen") == "ScreenEvaluation",
+                        age,
+                        [&] {
+                            auto latest = feed_ ? feed_(config.game_root) : mailbox_.poll(config.game_root);
+                            if (!latest) {
+                                return true;
+                            }
+                            auto snapshot = parse(latest->payload);
+                            return str(snapshot, L"screen") == "ScreenEvaluation" &&
+                                   snapshot.GetNamedNumber(L"completed", -1) == completed;
+                        });
+                    screenshot_updated = true;
                 } else {
                     capture(result_from_json(packet.GetNamedObject(L"result")), frame->observed - elapsed);
                 }
             }
         }
     }
+    if (!screenshot_updated) {
+        screenshots_.update(config.game_root, {}, false, 0);
+    }
+}
+
+void Engine::prepare_screenshots(const std::vector<Result>& results, uint64_t written) {
+    std::lock_guard lock(gate_);
+    if (!config_.sync || !config_.screenshots.enabled || written <= config_.capture_after) {
+        return;
+    }
+    std::vector<Result> candidates;
+    for (const auto& result : results) {
+        auto account = account_for(result.profile);
+        bool queued = std::any_of(data_.pending.begin(), data_.pending.end(), [&](const auto& item) {
+            return item.result.id == result.id;
+        });
+        if (account >= 0 && !queued && !data_.receipts.contains(result.id) && !result.ambiguous &&
+            result.side >= 1 && result.side <= 2 && !result.id.empty() && result.id.size() <= 128 &&
+            result.eligible && result.skip_reason.empty() && result.score >= 0 && result.score <= 1000000 &&
+            (!result.broken || config_.accounts[account].include_failed)) {
+            candidates.push_back(result);
+        }
+    }
+    screenshots_.prepare(candidates, config_.screenshots, written);
 }
 
 void Engine::publish_feedback() {
@@ -454,6 +512,9 @@ void Engine::complete(size_t index, const std::string& outcome) {
     }
 
     feedback_.update(id, outcome);
+    if (outcome != "accepted") {
+        screenshots_.decide(id, false);
+    }
 }
 
 void Engine::sync() {
@@ -551,6 +612,10 @@ void Engine::sync_account(size_t account) {
                 continue;
             }
 
+            if (item.result.broken && !config_.accounts[account].include_failed && item.state == "queued") {
+                complete(index, "failed_disabled");
+                continue;
+            }
             auto id = match(item.result.chart, catalog_);
             if (id.empty()) {
                 status_ = "Chart not matched: " + item.result.chart.title;
@@ -573,6 +638,7 @@ void Engine::sync_account(size_t account) {
                 continue;
             }
 
+            screenshots_.decide(item.result.id, true);
             item.state = "sending";
             try {
                 save_store(folder_, data_);

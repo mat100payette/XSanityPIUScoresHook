@@ -2,12 +2,14 @@
 #include "api.h"
 #include "mailbox.h"
 #include "result_feedback.h"
+#include "screenshots.h"
 #include <condition_variable>
 
 namespace piu {
 class Engine {
     fs::path folder_;
     Api& api_;
+    Screenshots screenshots_;
     MailboxReader mailbox_;
     ExportFeed feed_;
     mutable std::mutex gate_;
@@ -21,7 +23,7 @@ class Engine {
     std::array<std::string, 2> tokens_;
     std::array<std::string, 2> account_status_;
     std::array<std::string, 2> live_profiles_;
-    std::string status_ = "Enter your XSanity profile and PIU Scores API key in Account settings.";
+    std::string status_ = "Enter your XSanity profile and PIU Scores API key in Settings.";
     std::vector<Chart> catalog_;
     std::array<std::map<std::string, Score>, 2> best_;
     GameChart current_;
@@ -40,12 +42,14 @@ class Engine {
     void sync_account(size_t account);
     int account_for(const std::string& profile) const;
     void publish_feedback();
+    void prepare_screenshots(const std::vector<Result>& results, uint64_t written);
     void poll_loop();
     void sync_loop();
 
 public:
-    Engine(fs::path folder, Api& api, ExportFeed feed = {})
-        : folder_(std::move(folder)), api_(api), feed_(std::move(feed)) {
+    Engine(fs::path folder, Api& api, ExportFeed feed = {}, ScreenCapture capture = capture_game_png)
+        : folder_(std::move(folder)), api_(api), screenshots_(folder_, std::move(capture)),
+          feed_(std::move(feed)) {
     }
 
     ~Engine() {
@@ -58,7 +62,14 @@ public:
     std::string token(size_t account = 0) const;
     std::string player_status(uint64_t clock = now()) const;
     std::string status(uint64_t clock = now()) const;
-    void configure(const std::array<AccountInput, 2>& accounts, const std::string& mix);
+    void configure(const std::array<AccountInput, 2>& accounts,
+        const std::string& mix,
+        std::optional<ScreenshotOptions> screenshots = {});
+
+    std::string screenshot_status() const {
+        return screenshots_.error();
+    }
+
     void capture(const Result& result, uint64_t written);
     size_t pending_count(size_t account) const;
     void discard_pending(size_t account);

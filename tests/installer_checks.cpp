@@ -157,7 +157,14 @@ void installer_checks() {
     Store queue;
     queue.pending.push_back({result(), "Phoenix", iso_time(now()), "queued"});
     save_store(paths.state, queue);
+    auto staging = paths.state / L"pending-shots";
+    auto shot_key = std::wstring(64, L'a');
+    atomic_write(staging / (shot_key + L".png"), "provisional image");
+    atomic_write(staging / (shot_key + L".json"), "provisional metadata");
+    atomic_write(paths.state / L"Screenshots/keep.png", "saved PB image");
     installer.apply({game, false, true});
+    check(!fs::exists(staging) && read(paths.state / L"Screenshots/keep.png") == "saved PB image",
+        "removing sync deletes provisional captures but preserves saved screenshots");
     check(!load_preferences(paths.state).sync && load_preferences(paths.state).overlay &&
               load_store(paths.state).pending.empty(),
         "remove syncing independently and erase pending score payloads");

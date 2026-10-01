@@ -102,6 +102,17 @@ struct App {
         }
 
         switch (LOWORD(wparam)) {
+        case IDC_SCREENSHOTS:
+            update_screenshot_controls(dialog);
+            return TRUE;
+        case IDC_SCREENSHOT_BROWSE:
+        case IDC_SCREENSHOT_OPEN:
+            try {
+                screenshot_folder_command(dialog, app->engine, LOWORD(wparam) == IDC_SCREENSHOT_BROWSE);
+            } catch (...) {
+                show_error(dialog, exception_message());
+            }
+            return TRUE;
         case IDC_DISCARD1:
         case IDC_DISCARD2:
             app->discard_account(dialog, LOWORD(wparam) == IDC_DISCARD1 ? 0 : 1);
@@ -161,7 +172,7 @@ struct App {
 
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status.c_str());
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, Account, L"Account settings...");
+        AppendMenuW(menu, MF_STRING, Account, L"Settings...");
         AppendMenuW(menu, MF_STRING, Manage, L"Manage installation...");
         AppendMenuW(menu, MF_STRING, Updates, L"Check for updates...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);

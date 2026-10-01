@@ -8,6 +8,7 @@ local players = { "PlayerNumber_P1", "PlayerNumber_P2" }
 local profiles = "[]"
 local tick_error
 local feedback_state = "starting"
+local current_screen = ""
 
 local function quote(value)
     local text = tostring(value or "")
@@ -48,6 +49,8 @@ local function publish()
         .. profiles
         .. ',"feedback":'
         .. quote(feedback_state)
+        .. ',"screen":'
+        .. quote(current_screen)
     if completed_result then
         text = text .. ',"results":' .. completed_result .. ',"completed":' .. tostring(completed_at)
     end
@@ -350,6 +353,7 @@ local messages = {
     rejected = { "Upload rejected - check PIU Scores", "#FFA295" },
     unlinked = { "Not submitted - profile not linked", "#FFD078" },
     ambiguous = { "Not submitted - duplicate profile", "#FFD078" },
+    failed_disabled = { "Not submitted - failed PBs disabled", "#FFD078" },
     skipped = { "Not submitted - unsupported play", "#FFD078" },
     skipped_rate = { "Not submitted - music rate changed", "#FFD078" },
     skipped_judgement = { "Not submitted - altered judgement", "#FFD078" },
@@ -508,6 +512,7 @@ local function tick(delta)
     heartbeat = heartbeat + delta
     local top = SCREENMAN:GetTopScreen()
     local screen = top and top:GetName() or ""
+    current_screen = screen
     if screen == "ScreenGameplay" then
         if lastScreen ~= screen then
             active = {}

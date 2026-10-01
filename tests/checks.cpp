@@ -4,6 +4,7 @@ namespace piu::test {
 void engine_checks();
 void capture_window_checks();
 void player_checks();
+void screenshot_checks();
 void feedback_checks();
 void api_checks();
 void mailbox_checks();
@@ -63,6 +64,7 @@ int wmain(int argc, wchar_t** argv) {
         const Suite suites[] = {{L"engine", engine_checks},
             {L"capture", capture_window_checks},
             {L"players", player_checks},
+            {L"screenshots", screenshot_checks},
             {L"feedback", feedback_checks},
             {L"api", api_checks},
             {L"mailbox", mailbox_checks},

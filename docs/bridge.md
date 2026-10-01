@@ -45,6 +45,14 @@ Changing profiles during a song invalidates the attempt. Duplicate profile names
 
 The optional `plate` uses the same tap and hold-checkpoint judgements as XSanity's evaluation screen. It survives offline queuing and becomes `award` in the [PIU Scores observed-play API](https://piuscores.arroweclip.se/swagger/index.html). Failed stages omit it. Previously accepted plays are not reconstructed or resubmitted.
 
+## PB screenshots
+
+Screenshots are independent of OBS and disabled by default. The companion uses Windows Graphics Capture for the selected game's window and crops to the client area. It never falls back to capturing the desktop.
+
+The hook publishes the current `screen` alongside its result IDs. After three seconds on evaluation, the companion captures one provisional PNG for the eligible players on that screen. Website PB comparison decides whether to keep it; upload completion is not required. A failed PB qualifies only for an account with **Include failed PBs** enabled.
+
+Provisional images and their metadata live in `pending-shots` under the companion's state directory. They survive offline retries, then disappear when the image is kept or every candidate is ruled out. Turning screenshots off discards provisional captures. Removing sync also cleans them up; saved screenshots remain. Capture and output-folder failures do not block uploads.
+
 ## In-game notifications
 
 The companion returns outcomes through `Save/PiuCompanion/status.txt`. It replaces the file atomically when its contents change:
@@ -92,6 +100,7 @@ The hook allocates **1,024 numeric Lua array entries** and never resizes them. E
 | `results` | Optional array of up to two completed results, each with its original side and profile |
 | `completed` | Game-clock time of completion |
 | `feedback` | Status-reader readiness, available without logging |
+| `screen` | Current screen name, used to limit screenshots to evaluation |
 
 The reader also accepts the previous singular `result` envelope during upgrades. It estimates completion time from the observed heartbeat and elapsed game time, then applies the capture cutoff, validation, deduplication, and website-PB comparison.
 

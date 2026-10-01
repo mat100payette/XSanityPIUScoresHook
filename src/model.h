@@ -6,11 +6,18 @@ namespace piu {
 struct PlayerAccount {
     std::string profile;
     std::string protected_token;
+    bool include_failed = false;
 };
 
 struct AccountInput {
     std::string profile;
     std::string token;
+    bool include_failed = false;
+};
+
+struct ScreenshotOptions {
+    bool enabled = false;
+    fs::path folder;
 };
 
 struct Preferences {
@@ -20,6 +27,7 @@ struct Preferences {
     bool sync = true;
     bool overlay = false;
     uint64_t capture_after = 0;
+    ScreenshotOptions screenshots;
 };
 
 struct GameChart {

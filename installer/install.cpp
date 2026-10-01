@@ -657,6 +657,21 @@ void Installer::apply(
             transaction.remove(paths_.app / L"installation.json");
         }
 
+        if (!keep || !selection.sync) {
+            auto staging = paths_.state / L"pending-shots";
+            safe_path(staging);
+            if (fs::exists(staging)) {
+                for (const auto& entry : fs::directory_iterator(staging)) {
+                    auto name = entry.path().stem().wstring();
+                    auto extension = entry.path().extension();
+                    if (name.size() == 64 &&
+                        name.find_first_not_of(L"0123456789abcdef") == std::wstring::npos &&
+                        (extension == L".json" || extension == L".png")) {
+                        transaction.remove(entry.path());
+                    }
+                }
+            }
+        }
         transaction.commit();
     } catch (...) {
         auto error = std::current_exception();
@@ -673,6 +688,9 @@ void Installer::apply(
         remove_empty(GameHook::exports(root));
     }
 
+    if (!keep || !selection.sync) {
+        remove_empty(paths_.state / L"pending-shots");
+    }
     if (!keep) {
         remove_empty(paths_.app);
         remove_empty(paths_.state);

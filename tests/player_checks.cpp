@@ -169,12 +169,20 @@ void player_checks() {
         "both API key fields are masked");
     SetDlgItemTextW(dialog, IDC_PROFILE1, L" Alice ");
     SetDlgItemTextW(dialog, IDC_TOKEN, L"new-alice-key");
+    CheckDlgButton(dialog, IDC_FAILED1, BST_CHECKED);
+    CheckDlgButton(dialog, IDC_SCREENSHOTS, BST_CHECKED);
+    update_screenshot_controls(dialog);
+    check(IsWindowEnabled(GetDlgItem(dialog, IDC_SCREENSHOT_FOLDER)),
+        "screenshot opt-in enables the destination controls");
     save_accounts(dialog, engine);
     Engine saved(state, api);
     saved.load();
     check(saved.token() == "new-alice-key" && saved.token(1) == "bob-key" &&
               saved.config().accounts[0].profile == "Alice",
         "saving and reopening settings preserves the two distinct key associations");
+    check(saved.config().accounts[0].include_failed && !saved.config().accounts[1].include_failed &&
+              saved.config().screenshots.enabled,
+        "settings round-trip both independent opt-ins");
     auto bytes = read(state / L"settings.json");
     check(bytes.find("new-alice-key") == std::string::npos && bytes.find("bob-key") == std::string::npos,
         "both account keys are encrypted on disk");

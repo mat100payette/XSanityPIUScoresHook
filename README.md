@@ -15,17 +15,28 @@ Automatically upload your XSanity personal bests to [PIU Scores](https://piuscor
 4. Enter your **XSanity profile name** and **PIU Scores API key**. Optionally add a second player, then select **Phoenix** or **Phoenix 2**.
 5. Open **Play XSanity** from the Start menu to launch the game and companion together.
 
-The tray icon gives you **Account settings**, **Check for updates**, **Manage installation**, and **Exit**. Closing the game leaves the companion running. Run both normally as the same Windows user; do not launch the game as administrator.
+The tray icon gives you **Settings**, **Check for updates**, **Manage installation**, and **Exit**. Closing the game leaves the companion running. Run both normally as the same Windows user; do not launch the game as administrator.
 
 ## Play with two people
 
-In **Account settings**, pair each player's XSanity profile name with their own API key. The name is the one selected **in XSanity**, not their PIU Scores username. Names ignore capitalization and leading/trailing spaces; otherwise they must match exactly. Use distinct named profiles, not guest profiles.
+In **Settings**, pair each player's XSanity profile name with their own API key. The name is the one selected **in XSanity**, not their PIU Scores username. Names ignore capitalization and leading/trailing spaces; otherwise they must match exactly. Use distinct named profiles, not guest profiles.
 
 The dialog shows the detected **P1/P2 → account** mapping. Players can swap sides without editing their keys. An unknown or duplicate profile does not upload; the other correctly matched player can still sync. Each player's chart difficulty, score, plate, and eligibility are checked independently. Co-op is excluded.
 
 When upgrading from a single-account version, your existing key is retained as **Account 1**. Add its XSanity profile name before new scores can sync. Existing pending uploads retain their original account.
 
 Profile/key changes are blocked while that account has pending uploads. Let them finish, or explicitly **Discard pending...** for that account if you no longer want them. Discarded scores are not recovered from game history.
+
+## Optional PB settings
+
+Open **Settings** from the tray:
+
+- **Include failed PBs** — off by default, separately for each player. Uploads near-passes that improve a failed website PB, or establish one. A failed score never replaces a clear, and modifier/autoplay checks still apply.
+- **Save screenshots of PBs** — off by default. Saves a PNG of the game window for qualifying PBs, including failed PBs when that player has opted in. Two-player results produce one screenshot if either player qualifies.
+
+The default folder is `%LOCALAPPDATA%\XSanityPIUScoresHook\Screenshots`. Use **Browse...** to change it or **Open folder** to view images. Filenames include the song, difficulty, player, score, and time. Saved images remain after uninstall.
+
+Keep the results screen open for at least three seconds so its animation can settle. The companion captures a provisional image while results are visible and keeps it only after comparison with PIU Scores identifies a PB. Offline images wait alongside pending scores; non-PB images are discarded. Screenshot failures appear in Settings and do not stop syncing. Native window capture requires Windows 10 version 1903 or later and a visible game window.
 
 ## Result notifications
 
@@ -59,7 +70,7 @@ Close XSanity, then open **Manage installation** from the Start menu or tray. Yo
 If your version has no **Check for updates** menu item, download and run the [latest installer](https://github.com/mat100payette/XSanityPIUScoresHook/releases/latest) once. No uninstall is needed.
 
 - Updates and moves preserve account settings and pending uploads while syncing stays enabled. The OBS URL stays the same.
-- Removing syncing discards pending uploads. Enabling it again captures new plays only.
+- Removing syncing discards pending uploads and provisional screenshots. Enabling it again captures new plays only.
 - Removing both components also deletes saved account data.
 
 ## What gets synced?
