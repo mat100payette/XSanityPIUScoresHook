@@ -12,62 +12,73 @@ end
 local function fixture(options)
     options = options or {}
     local game = { screen = "ScreenSelectMusic", results = 0, messages = {} }
-    local song = {
-        GetDisplayMainTitle = function()
-            return "Digitalis"
-        end,
-    }
+    options.p2 = options.p2 or {}
+    local function side(pn)
+        return pn == "PlayerNumber_P2" and 2 or 1
+    end
+    local function opts(pn)
+        return side(pn) == 2 and options.p2 or options
+    end
+    local function make_player(options)
+        local song = {
+            GetDisplayMainTitle = function()
+                return "Digitalis"
+            end,
+        }
 
-    local steps = {
-        GetStepsType = function()
-            return "StepsType_Pump_Single"
-        end,
-        GetMeter = function()
-            return 14
-        end,
-        GetDescription = function()
-            return "S14"
-        end,
-    }
+        local steps = {
+            GetStepsType = function()
+                return options.kind or "StepsType_Pump_Single"
+            end,
+            GetMeter = function()
+                return options.level or 14
+            end,
+            GetDescription = function()
+                return options.description or ("S" .. tostring(options.level or 14))
+            end,
+        }
 
-    local player = {
-        GetPlayerOptionsString = function(_, level)
-            if options.mods_error then
-                error("options unavailable")
-            end
+        local player = {
+            GetPlayerOptionsString = function(_, level)
+                if options.mods_error then
+                    error("options unavailable")
+                end
 
-            return (level == "ModsLevel_Current" and options.current_mods)
-                or options.mods
-                or "NormalJudgement"
-        end,
-        GetPlayerController = function()
-            return options.controller or "PlayerController_Human"
-        end,
-    }
+                return (level == "ModsLevel_Current" and options.current_mods)
+                    or options.mods
+                    or "NormalJudgement"
+            end,
+            GetPlayerController = function()
+                return options.controller or "PlayerController_Human"
+            end,
+        }
 
-    local stats = {
-        GetPhoenixScore = function()
-            return options.score or 998123
-        end,
-        GetFailedAux = function()
-            return options.broken or false
-        end,
-        GetAutoPlay = function()
-            return options.used_autoplay or false
-        end,
-        GetTapNoteScores = function(_, name)
-            if options.missing_counts then
-                error("judgements unavailable")
-            end
+        local stats = {
+            GetPhoenixScore = function()
+                return options.score or 998123
+            end,
+            GetFailedAux = function()
+                return options.broken or false
+            end,
+            GetAutoPlay = function()
+                return options.used_autoplay or false
+            end,
+            GetTapNoteScores = function(_, name)
+                if options.missing_counts then
+                    error("judgements unavailable")
+                end
 
-            local counts = options.counts or { W1 = 100, W3 = 3, W4 = 2, W5 = 1 }
-            return counts[name:gsub("TapNoteScore_", "")] or 0
-        end,
-        IsDisqualified = function()
-            return options.disqualified or false
-        end,
-    }
+                local counts = options.counts or { W1 = 100, W3 = 3, W4 = 2, W5 = 1 }
+                return counts[name:gsub("TapNoteScore_", "")] or 0
+            end,
+            IsDisqualified = function()
+                return options.disqualified or false
+            end,
+        }
 
+        return { song = song, steps = steps, player = player, stats = stats }
+    end
+    local people = { make_player(options), make_player(options.p2) }
     local fallback = {}
     local env = setmetatable({
         Def = {
@@ -108,17 +119,19 @@ local function fixture(options)
             GetMasterPlayerNumber = function()
                 return "PlayerNumber_P1"
             end,
-            IsHumanPlayer = function()
-                return not options.autoplay
+            IsHumanPlayer = function(_, pn)
+                local enabled = options.p2_only and side(pn) == 2
+                    or (not options.p2_only and side(pn) <= (options.players or 1))
+                return enabled and not opts(pn).autoplay
             end,
             GetCurrentSong = function()
-                return song
+                return people[1].song
             end,
-            GetCurrentSteps = function()
-                return steps
+            GetCurrentSteps = function(_, pn)
+                return people[side(pn)].steps
             end,
-            GetPlayerState = function()
-                return player
+            GetPlayerState = function(_, pn)
+                return people[side(pn)].player
             end,
             GetGameMode = function()
                 return options.mode or "Full"
@@ -143,11 +156,26 @@ local function fixture(options)
                 }
             end,
         },
+        PROFILEMAN = {
+            IsPersistentProfile = function(_, pn)
+                return not opts(pn).guest
+            end,
+            GetProfile = function(_, pn)
+                return {
+                    GetDisplayName = function()
+                        return opts(pn).profile or (side(pn) == 1 and "Test Player" or "Friend")
+                    end,
+                    GetGUID = function()
+                        return opts(pn).guid or ("fixture-" .. tostring(side(pn)))
+                    end,
+                }
+            end,
+        },
         STATSMAN = {
             GetCurStageStats = function()
                 return {
-                    GetPlayerStageStats = function()
-                        return stats
+                    GetPlayerStageStats = function(_, pn)
+                        return people[side(pn)].stats
                     end,
                 }
             end,
@@ -180,8 +208,8 @@ local function fixture(options)
         end
 
         local text = table.concat(bytes)
-        local cur = text:match('^{"current":(.-),"result":') or text:match('^{"current":(.*)}$')
-        local result = text:match(',"result":(.-),"completed":')
+        local cur = text:match('^{"current":(.-),"players":')
+        local result = text:match(',"results":%[(.*)%],"completed":')
         game.current = cur
         if result and result ~= game.result then
             game.results = game.results + 1
@@ -250,11 +278,11 @@ game:tick("ScreenGameplay")
 game:tick("ScreenEvaluation")
 check(game.results == 2 and game.result ~= result, "a second attempt has a distinct event identity")
 
-for _, options in ipairs({ { autoplay = true }, { players = 2 } }) do
+for _, options in ipairs({ { autoplay = true } }) do
     local skipped = fixture(options)
     skipped:tick("ScreenGameplay")
     skipped:tick("ScreenEvaluation")
-    check(skipped.result == nil, "autoplay and multiplayer do not export results")
+    check(skipped.result == nil, "autoplay does not export results")
 end
 
 for _, options in ipairs({
@@ -399,6 +427,62 @@ sync:tick("ScreenGameplay")
 check(sync.current == '{"playing":false}', "sync-only heartbeat omits the current chart")
 sync:tick("ScreenEvaluation")
 check(sync.result and sync.result:find('"eligible":true', 1, true), "sync-only still captures results")
+
+local two = fixture({
+    players = 2,
+    profile = "Alice",
+    score = 950001,
+    p2 = { profile = "Bob", level = 16, score = 980002, counts = { W1 = 90, Miss = 10 } },
+})
+two:tick("ScreenGameplay")
+check(two.current == '{"playing":false}', "two-player gameplay does not change the single-player overlay")
+two:tick("ScreenEvaluation")
+check(
+    two.result:find('"profile":"Alice","side":1', 1, true)
+        and two.result:find('"profile":"Bob","side":2', 1, true)
+        and two.result:find('"score":950001', 1, true)
+        and two.result:find('"score":980002', 1, true)
+        and two.result:find('"difficulty":"S16"', 1, true)
+        and two.result:find('"plate":"TG"', 1, true),
+    "both independent chart results retain profile, side, score and plate"
+)
+
+local partial = fixture({ players = 2, missing_counts = true, p2 = { profile = "Bob" } })
+partial:tick("ScreenGameplay")
+partial:tick("ScreenEvaluation")
+check(
+    partial.result
+        and not partial.result:find('"side":1', 1, true)
+        and partial.result:find('"side":2', 1, true),
+    "P1 result API failure does not suppress P2"
+)
+
+local duplicate = fixture({ players = 2, profile = "Same", p2 = { profile = "Same" } })
+duplicate:tick("ScreenGameplay")
+duplicate:tick("ScreenEvaluation")
+local _, ambiguous = duplicate.result:gsub('"ambiguous":true', "")
+check(ambiguous == 2, "duplicate profiles mark both results as ambiguous")
+
+local coop =
+    fixture({ players = 2, kind = "StepsType_Pump_Routine", p2 = { kind = "StepsType_Pump_Routine" } })
+coop:tick("ScreenGameplay")
+coop:tick("ScreenEvaluation")
+check(not coop.result, "co-op charts are never exported as individual scores")
+
+local switched_options = { profile = "Before" }
+local switched = fixture(switched_options)
+switched:tick("ScreenGameplay")
+switched_options.profile = "After"
+switched:tick("ScreenEvaluation")
+check(
+    switched.result:find('"profile":"Before"', 1, true) and switched.result:find('"eligible":false', 1, true),
+    "profile change cannot redirect a completed attempt"
+)
+
+local solo_p2 = fixture({ p2_only = true, p2 = { profile = "Right" } })
+solo_p2:tick("ScreenGameplay")
+solo_p2:tick("ScreenEvaluation")
+check(solo_p2.result:find('"profile":"Right","side":2', 1, true), "one player may use the P2 side")
 
 local clock_failure = fixture({ clock_error = true })
 check(

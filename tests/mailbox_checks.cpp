@@ -1,5 +1,6 @@
 #include "support.h"
 #include "mailbox.h"
+#include "engine.h"
 #include "game_hook.h"
 #include <cmath>
 #include <limits>
@@ -117,6 +118,127 @@ void live_checks() {
         "decodes the shipped hook's actual heartbeat after full Lua garbage collections");
     check(!foreign.poll(folder / L"wrong-game"), "ignores a process outside the selected game folder");
     check(!reader.poll(folder), "unchanged memory cannot refresh a heartbeat");
+    // Real hook -> real Lua process memory -> real mailbox reader -> engine -> API transport.
+    Fixture account_files("two-players");
+    auto state = account_files.root / L"state";
+    Preferences config;
+    config.game_root = folder;
+    config.accounts = {
+        PlayerAccount{"Alice", protect("alice-key")}, PlayerAccount{"Bob", protect("bob-key")}};
+    save_preferences(state, config);
+    std::vector<std::pair<std::string, Object>> uploads;
+    bool alice_offline = true;
+    PiuScoresApi api([&](const std::string& url,
+                         const std::string& token,
+                         const std::optional<Object>& body) {
+        check(token == "alice-key" || token == "bob-key", "transport receives only the matched account key");
+        if (url.find("/charts?") != std::string::npos) {
+            return parse(
+                R"({"data":[{"id":"s14","songName":"Digitalis","type":"Single","level":14},{"id":"s16","songName":"Digitalis","type":"Single","level":16}],"next":null})");
+        }
+
+        if (!body) {
+            if (token == "alice-key" && alice_offline) {
+                throw Error("Account temporarily unavailable");
+            }
+
+            return parse(R"({"scoringModel":"phoenix","data":[],"next":null})");
+        }
+
+        uploads.emplace_back(token, body->GetNamedArray(L"plays").GetAt(0).GetObject());
+        return parse(R"({"recorded":1})");
+    });
+    Engine engine(state, api);
+    engine.load();
+    auto command = [&](std::string_view value) {
+        DWORD count = 0;
+        check(WriteFile(commands.get(), value.data(), static_cast<DWORD>(value.size()), &count, nullptr) &&
+                  count == value.size(),
+            "drive isolated game process");
+    };
+    auto wait_for = [&](const auto& ready) {
+        auto until = GetTickCount64() + 10000;
+        while (GetTickCount64() < until) {
+            command("tick\n");
+            Sleep(30);
+            engine.poll();
+            if (ready()) {
+                return;
+            }
+        }
+
+        throw Error("Two-player mailbox integration timed out");
+    };
+    command("play\n");
+    wait_for([&] {
+        return engine.player_status().find("P2: Bob") != std::string::npos;
+    });
+    command("finish\n");
+    wait_for([&] {
+        return engine.store().pending.size() == 2;
+    });
+    rejects(
+        [&] {
+            engine.sync();
+        },
+        "one account outage is reported after the other account is serviced");
+    check(uploads.size() == 1 && uploads[0].first == "bob-key" &&
+              str(uploads[0].second, L"chartId") == "s16" && number(uploads[0].second, L"score") == 980002 &&
+              str(uploads[0].second, L"award") == "TG",
+        "P2 posts its own chart, score and plate while P1 remains offline");
+    Engine restarted(state, api);
+    restarted.load();
+    check(restarted.pending_count(0) == 1 && restarted.pending_count(1) == 0,
+        "pending account survives restart");
+    alice_offline = false;
+    restarted.sync();
+    check(uploads.size() == 2 && uploads[1].first == "alice-key" &&
+              str(uploads[1].second, L"chartId") == "s14" && number(uploads[1].second, L"score") == 950001,
+        "restarted queue uses Alice's original account");
+    // Continue with the restarted engine so old snapshots cannot be submitted again.
+    command("swap\n");
+    auto until = GetTickCount64() + 10000;
+    while (restarted.player_status().find("P1: Bob") == std::string::npos && GetTickCount64() < until) {
+        command("tick\n");
+        Sleep(30);
+        restarted.poll();
+    }
+
+    check(restarted.player_status().find("P1: Bob — Account 2 matched") != std::string::npos,
+        "saved profiles follow the players when sides swap");
+    command("finish\n");
+    until = GetTickCount64() + 10000;
+    while (restarted.store().pending.size() != 2 && GetTickCount64() < until) {
+        command("tick\n");
+        Sleep(30);
+        restarted.poll();
+    }
+
+    check(restarted.store().pending.size() == 2, "both swapped results reach the real mailbox reader");
+    restarted.sync();
+    check(uploads.size() == 4 && uploads[2].first == "alice-key" &&
+              number(uploads[2].second, L"score") == 950101 && uploads[3].first == "bob-key" &&
+              number(uploads[3].second, L"score") == 980102,
+        "side swapping never swaps API keys or result payloads");
+    restarted.poll();
+    restarted.sync();
+    check(uploads.size() == 4, "repeated snapshots do not duplicate either player's upload");
+    auto prior_receipts = restarted.store().receipts.size();
+    command("invalid\n");
+    command("finish\n");
+    until = GetTickCount64() + 10000;
+    while (restarted.store().receipts.size() == prior_receipts && GetTickCount64() < until) {
+        command("tick\n");
+        Sleep(30);
+        restarted.poll();
+    }
+
+    check(restarted.pending_count(0) == 0 && restarted.pending_count(1) == 1 &&
+              restarted.store().receipts.size() == prior_receipts + 1,
+        "Alice's improper judgement modifier is skipped while Bob's valid result queues");
+    restarted.sync();
+    check(uploads.size() == 5 && uploads.back().first == "bob-key",
+        "only the eligible player's result reaches the upload transport");
     DWORD written = 0;
     WriteFile(commands.get(), "quit\n", 5, &written, nullptr);
     check(WaitForSingleObject(child.get(), 5000) == WAIT_OBJECT_0, "child exits normally");

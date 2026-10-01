@@ -90,7 +90,7 @@ struct Fixture {
 };
 
 inline Result result(std::string id = "event-1", int score = 950000, bool broken = false) {
-    return {std::move(id), {"Test Song!", "Single", "S10", 10}, score, broken, true};
+    return {std::move(id), {"Test Song!", "Single", "S10", 10}, score, broken, true, "", "Test Player", 1};
 }
 
 } // namespace piu::test

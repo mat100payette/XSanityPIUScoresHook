@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "account_view.h"
 #include "game_hook.h"
 #include "overlay.h"
 #include "ui.h"
@@ -42,27 +43,32 @@ struct App {
     void initialize_account(HWND dialog) {
         account_dialog = dialog;
         set_window_icons(dialog, account_large_icon, account_small_icon, IDI_APP, GetDpiForWindow(dialog));
-        auto config = engine.config();
-
-        SetDlgItemTextW(dialog, IDC_TOKEN, wide(engine.token()).c_str());
-        SendDlgItemMessageW(dialog, IDC_TOKEN, EM_SETLIMITTEXT, 2048, 0);
-        SendDlgItemMessageW(dialog, IDC_MIX, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Phoenix"));
-        SendDlgItemMessageW(dialog, IDC_MIX, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Phoenix 2"));
-        SendDlgItemMessageW(dialog, IDC_MIX, CB_SETCURSEL, config.mix == "Phoenix2" ? 1 : 0, 0);
-        SetDlgItemTextW(dialog,
-            IDC_STATUS,
-            L"Get a personal API token on PIU Scores. It is encrypted for your Windows account. "
-            L"Keep the same account while uploads are pending.");
+        initialize_accounts(dialog, engine);
+        SetTimer(dialog, 1, 1000, nullptr);
     }
 
     void save_account(HWND dialog) {
         try {
-            auto token = utf8(control_text(dialog, IDC_TOKEN));
-            auto index = SendDlgItemMessageW(dialog, IDC_MIX, CB_GETCURSEL, 0, 0);
-
-            engine.configure(token, index == 1 ? "Phoenix2" : "Phoenix");
-            SecureZeroMemory(token.data(), token.size());
+            save_accounts(dialog, engine);
             EndDialog(dialog, IDOK);
+        } catch (...) {
+            show_error(dialog, exception_message());
+        }
+    }
+
+    void discard_account(HWND dialog, size_t account) {
+        auto text =
+            L"Discard all pending scores for Account " + std::to_wstring(account + 1) +
+            L"? They will not be uploaded or recovered from game history. The other account is unchanged.";
+        if (MessageBoxW(
+                dialog, text.c_str(), L"Discard pending scores", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
+            IDYES) {
+            return;
+        }
+
+        try {
+            engine.discard_pending(account);
+            refresh_accounts(dialog, engine);
         } catch (...) {
             show_error(dialog, exception_message());
         }
@@ -77,6 +83,15 @@ struct App {
             return TRUE;
         }
 
+        if (message == WM_TIMER && app) {
+            refresh_accounts(dialog, app->engine);
+            return TRUE;
+        }
+
+        if (message == WM_DESTROY) {
+            KillTimer(dialog, 1);
+        }
+
         if (message == WM_DPICHANGED && app) {
             set_window_icons(
                 dialog, app->account_large_icon, app->account_small_icon, IDI_APP, HIWORD(wparam));
@@ -87,6 +102,10 @@ struct App {
         }
 
         switch (LOWORD(wparam)) {
+        case IDC_DISCARD1:
+        case IDC_DISCARD2:
+            app->discard_account(dialog, LOWORD(wparam) == IDC_DISCARD1 ? 0 : 1);
+            return TRUE;
         case IDC_WEBSITE:
             ShellExecuteW(
                 dialog, L"open", L"https://piuscores.arroweclip.se", nullptr, nullptr, SW_SHOWNORMAL);
@@ -311,7 +330,8 @@ int run_app(bool start_game) {
     create_app_window(app);
     app.add_tray_icon();
     engine.start();
-    if (engine.token().empty()) {
+    if ((engine.token().empty() && engine.token(1).empty()) ||
+        (config.sync && !engine.token().empty() && config.accounts[0].profile.empty())) {
         app.show_account();
     }
 

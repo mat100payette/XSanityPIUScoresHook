@@ -22,7 +22,7 @@ The actor preallocates exactly 1,024 numeric Lua array entries and never resizes
 | 9 | `GetTimeSinceStart()` at publication |
 | 10–1024 | JSON bytes, six bytes per integer, least-significant byte first; unused slots cleared |
 
-JSON contains `current`, and optionally `result` plus its `completed` game-clock time. The native side estimates completion time from the observed heartbeat and elapsed game time. It applies the existing capture cutoff, validation, deduplication, and website-PB comparison before upload.
+JSON contains the existing single-player `current` state, a `players` array of live side/profile names, and optionally a `results` array (at most two) plus its `completed` game-clock time. Each result includes its side and the profile name captured at the start of that attempt. Profile changes invalidate the attempt; duplicate names or profile GUIDs cannot produce account uploads. The companion matches names case-insensitively without fuzzy matching and stores the chosen account index with each pending result. The reader also accepts the previous singular result envelope during upgrades; a result without an explicitly matched profile cannot enter a new queue. The native side estimates completion time from the observed heartbeat and elapsed game time. It applies the existing capture cutoff, validation, deduplication, and website-PB comparison before upload.
 
 ## Plates and play eligibility
 

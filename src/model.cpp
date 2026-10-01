@@ -2,6 +2,20 @@
 #include <algorithm>
 
 namespace piu {
+std::string trim_profile(std::string_view name) {
+    auto first = name.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) {
+        return {};
+    }
+
+    return std::string(name.substr(first, name.find_last_not_of(" \t\r\n") - first + 1));
+}
+
+bool same_profile(std::string_view left, std::string_view right) {
+    auto a = wide(trim_profile(left)), b = wide(trim_profile(right));
+    return !a.empty() && !b.empty() && CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
 Preferences load_preferences(const fs::path& folder) {
     Preferences config;
     if (!fs::exists(folder / L"settings.json")) {
@@ -11,7 +25,21 @@ Preferences load_preferences(const fs::path& folder) {
     auto data = parse(read(folder / L"settings.json"));
     config.mix = str(data, L"Mix", "Phoenix");
     validate_mix(config.mix);
-    config.protected_token = str(data, L"ProtectedToken");
+    if (data.HasKey(L"Accounts")) {
+        auto accounts = data.GetNamedArray(L"Accounts");
+        if (accounts.Size() > config.accounts.size()) {
+            throw Error("Unsupported number of player accounts.");
+        }
+
+        for (uint32_t i = 0; i < accounts.Size(); ++i) {
+            auto account = accounts.GetAt(i).GetObject();
+            config.accounts[i] = {str(account, L"Profile"), str(account, L"ProtectedToken")};
+        }
+    } else {
+        // Preserve the existing account; require its game profile before capturing new plays.
+        config.accounts[0].protected_token = str(data, L"ProtectedToken");
+    }
+
     config.game_root = wide(str(data, L"GameRoot"));
     config.sync = flag(data, L"SyncEnabled", true);
     config.overlay = flag(data, L"OverlayEnabled", false);
@@ -23,7 +51,15 @@ Preferences load_preferences(const fs::path& folder) {
 void save_preferences(const fs::path& folder, const Preferences& config) {
     Object data;
     put(data, L"Mix", config.mix);
-    put(data, L"ProtectedToken", config.protected_token);
+    Array accounts;
+    for (const auto& account : config.accounts) {
+        Object row;
+        put(row, L"Profile", account.profile);
+        put(row, L"ProtectedToken", account.protected_token);
+        accounts.Append(row);
+    }
+
+    data.Insert(L"Accounts", accounts);
     put(data, L"GameRoot", utf8(config.game_root.wstring()));
     put(data, L"SyncEnabled", config.sync);
     put(data, L"OverlayEnabled", config.overlay);
@@ -41,7 +77,10 @@ Result result_from_json(const Object& data) {
         number(data, L"score"),
         flag(data, L"broken"),
         flag(data, L"eligible"),
-        str(data, L"plate")};
+        str(data, L"plate"),
+        str(data, L"profile"),
+        number(data, L"side"),
+        flag(data, L"ambiguous")};
 }
 
 Object result_json(const Result& result) {
@@ -54,6 +93,9 @@ Object result_json(const Result& result) {
     put(data, L"score", result.score);
     put(data, L"broken", result.broken);
     put(data, L"eligible", result.eligible);
+    put(data, L"profile", result.profile);
+    put(data, L"side", result.side);
+    put(data, L"ambiguous", result.ambiguous);
     if (!result.plate.empty() && !result.broken) {
         put(data, L"plate", result.plate);
     }
@@ -90,6 +132,11 @@ Store load_store(const fs::path& folder) {
         validate_mix(pending.mix);
         pending.played_at = str(item, L"PlayedAt");
         pending.state = str(item, L"State", "queued");
+        pending.account = number(item, L"Account");
+        if (pending.account < 0 || pending.account > 1) {
+            throw Error("Pending upload has an invalid account.");
+        }
+
         if (pending.state == "sending") {
             pending.state = "uncertain";
         }
@@ -114,6 +161,7 @@ void save_store(const fs::path& folder, const Store& store) {
         put(row, L"Mix", item.mix);
         put(row, L"PlayedAt", item.played_at);
         put(row, L"State", item.state);
+        put(row, L"Account", item.account);
         row.Insert(L"Result", result_json(item.result));
         pending.Append(row);
     }

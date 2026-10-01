@@ -134,12 +134,16 @@ void installer_checks() {
               fs::exists(paths.menu / L"Manage installation.lnk"),
         "setup registers maintenance and simultaneous launch shortcuts");
     auto preferences = config;
-    preferences.protected_token = protect("existing-token");
+    preferences.accounts = {
+        PlayerAccount{"Alice", protect("existing-token")}, PlayerAccount{"Bob", protect("second-token")}};
     save_preferences(paths.state, preferences);
     installer.apply({game, true, true});
     config = load_preferences(paths.state);
-    check(config.sync && config.overlay && unprotect(config.protected_token) == "existing-token",
-        "add optional overlay without losing account settings");
+    check(config.sync && config.overlay && config.accounts[0].profile == "Alice" &&
+              config.accounts[1].profile == "Bob" &&
+              unprotect(config.accounts[0].protected_token) == "existing-token" &&
+              unprotect(config.accounts[1].protected_token) == "second-token",
+        "component maintenance preserves both encrypted profile/key associations");
     host.running = true;
     rejects(
         [&] {
@@ -329,7 +333,7 @@ struct HookUpgradeFixture {
     void seed() {
         auto preferences = load_preferences(paths.state);
         preferences.mix = "Phoenix2";
-        preferences.protected_token = protect("upgrade-account-token");
+        preferences.accounts[0].protected_token = protect("upgrade-account-token");
         preferences.capture_after = 1;
         save_preferences(paths.state, preferences);
 
@@ -443,7 +447,7 @@ void hook_entrypoint_checks() {
                         L"ScreenSystemLayer overlay" / L"default.lua";
         auto builtin = read(fallback);
         auto queue = read(fixture.paths.state / L"uploads.json");
-        auto token = load_preferences(fixture.paths.state).protected_token;
+        auto token = load_preferences(fixture.paths.state).accounts[0].protected_token;
         auto setup = fixture.installer(latest);
 
         atomic_write(auxiliary, first.source() + "-- owner edit\n");
@@ -477,7 +481,7 @@ void hook_entrypoint_checks() {
                   str(updated, L"hookFile") == utf8(GameHook::LayerName),
             "entrypoint upgrade installs the loaded overlay and removes only receipt-owned auxiliary actors");
         check(read(fallback) == builtin && read(fixture.paths.state / L"uploads.json") == queue &&
-                  load_preferences(fixture.paths.state).protected_token == token,
+                  load_preferences(fixture.paths.state).accounts[0].protected_token == token,
             "entrypoint upgrade preserves the built-in overlay, account, and pending uploads");
         setup.apply({fixture.game, false, false});
         check(!fs::exists(GameHook::layer(fixture.game)) && read(fallback) == builtin,
@@ -610,7 +614,7 @@ void hook_relocation_checks() {
         moved.installer(first).apply({moved.game, true, true});
         moved.seed();
         auto old_root = moved.game;
-        auto token = load_preferences(moved.paths.state).protected_token;
+        auto token = load_preferences(moved.paths.state).accounts[0].protected_token;
         auto queue = read(moved.paths.state / L"uploads.json");
         auto timestamp = fs::file_time_type::clock::now() - std::chrono::hours(48);
         fs::last_write_time(GameHook::layer(moved.game), timestamp);
@@ -637,7 +641,8 @@ void hook_relocation_checks() {
                   config.game_root == moved.game && str(marker, L"gameRoot") == utf8(moved.game.wstring()) &&
                   str(marker, L"hookSha256") == target.fingerprint(),
             "relocation adopts the recorded exporter and commits its new path and target version");
-        check(config.sync && config.overlay && config.mix == "Phoenix2" && config.protected_token == token &&
+        check(config.sync && config.overlay && config.mix == "Phoenix2" &&
+                  config.accounts[0].protected_token == token &&
                   read(moved.paths.state / L"uploads.json") == queue,
             "move and upgrade preserve component choices, account and pending uploads");
         check(config.capture_after > 1 && !fs::exists(GameHook::exports(moved.game) / L"current.json") &&
@@ -659,7 +664,7 @@ void hook_relocation_checks() {
     copied.installer(first).apply({copied.game, false, true});
     auto config = load_preferences(copied.paths.state);
     config.mix = "Phoenix2";
-    config.protected_token = protect("copy-account-token");
+    config.accounts[0].protected_token = protect("copy-account-token");
     save_preferences(copied.paths.state, config);
     atomic_write(GameHook::exports(copied.game) / L"current.json", "stale chart");
     atomic_write(GameHook::exports(copied.game) / L"keep.txt", "unrelated file");
@@ -690,7 +695,8 @@ void hook_relocation_checks() {
         "selecting a copied game transfers the exporter and clears stale charts while preserving both games");
     auto relocated = load_preferences(copied.paths.state);
     check(!relocated.sync && relocated.overlay && relocated.game_root == destination &&
-              relocated.mix == config.mix && relocated.protected_token == config.protected_token &&
+              relocated.mix == config.mix &&
+              relocated.accounts[0].protected_token == config.accounts[0].protected_token &&
               !fs::exists(copied.paths.state / L"uploads.json"),
         "overlay-only relocation retains account settings without enabling syncing or creating a queue");
 
@@ -782,7 +788,7 @@ void hook_upgrade_checks() {
         "receipt recognizes arbitrary previous managed exporter without adding historical hashes");
 
     auto queued = read(sequential.paths.state / L"uploads.json");
-    auto token = load_preferences(sequential.paths.state).protected_token;
+    auto token = load_preferences(sequential.paths.state).accounts[0].protected_token;
     sequential.host.running = true;
     auto before_stops = sequential.host.stops;
     auto before_files = snapshot_files(sequential.files.root);
@@ -799,7 +805,8 @@ void hook_upgrade_checks() {
     check(second.current(layer) && str(parse(read(marker_path)), L"hookSha256") == second.fingerprint(),
         "sequential update replaces old exporter and advances its receipt");
     auto upgraded = load_preferences(sequential.paths.state);
-    check(upgraded.capture_after > 1 && upgraded.mix == "Phoenix2" && upgraded.protected_token == token &&
+    check(upgraded.capture_after > 1 && upgraded.mix == "Phoenix2" &&
+              upgraded.accounts[0].protected_token == token &&
               read(sequential.paths.state / L"uploads.json") == queued,
         "exporter replacement resets cutoff while preserving account, settings and pending uploads");
     check(!fs::exists(GameHook::exports(sequential.game) / L"current.json") &&

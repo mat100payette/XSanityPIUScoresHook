@@ -48,7 +48,7 @@ void configure_fixture(const fs::path& state, const fs::path& game, bool sync = 
     config.game_root = game;
     config.sync = sync;
     config.overlay = overlay;
-    config.protected_token = protect("fake-test-token");
+    config.accounts[0] = {"Test Player", protect("fake-test-token")};
     save_preferences(state, config);
 }
 
@@ -233,12 +233,15 @@ void engine_checks() {
         "offline result stays durable and queued");
     rejects(
         [&] {
-            queued.configure("fake-test-token", "Phoenix2");
+            queued.configure({AccountInput{"Test Player", "fake-test-token"}, AccountInput{}}, "Phoenix2");
         },
         "pending results prevent mix changes");
-    queued.configure("replacement-test-token", "Phoenix");
-    check(queued.store().pending.size() == 1 && queued.token() == "replacement-test-token",
-        "expired account token can be replaced without losing pending results");
+    rejects(
+        [&] {
+            queued.configure(
+                {AccountInput{"Test Player", "replacement-test-token"}, AccountInput{}}, "Phoenix");
+        },
+        "pending uploads cannot be redirected to a different key");
     offline.offline = false;
     queued.sync();
     check(offline.plays.size() == 1 && queued.store().pending.empty(),

@@ -1,10 +1,21 @@
 #pragma once
 #include "platform.h"
+#include <array>
 
 namespace piu {
+struct PlayerAccount {
+    std::string profile;
+    std::string protected_token;
+};
+
+struct AccountInput {
+    std::string profile;
+    std::string token;
+};
+
 struct Preferences {
     std::string mix = "Phoenix";
-    std::string protected_token;
+    std::array<PlayerAccount, 2> accounts;
     fs::path game_root;
     bool sync = true;
     bool overlay = false;
@@ -39,6 +50,9 @@ struct Result {
     bool broken = false;
     bool eligible = false;
     std::string plate;
+    std::string profile;
+    int side = 0;
+    bool ambiguous = false;
 };
 
 struct Pending {
@@ -46,6 +60,7 @@ struct Pending {
     std::string mix;
     std::string played_at;
     std::string state = "queued";
+    int account = 0;
 };
 
 struct Store {
@@ -61,6 +76,8 @@ struct Play {
     std::string plate;
 };
 
+std::string trim_profile(std::string_view name);
+bool same_profile(std::string_view left, std::string_view right);
 Preferences load_preferences(const fs::path& folder);
 void save_preferences(const fs::path& folder, const Preferences& config);
 Store load_store(const fs::path& folder);
