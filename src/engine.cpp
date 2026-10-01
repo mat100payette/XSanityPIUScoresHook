@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "game_hook.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -8,6 +9,7 @@ namespace {
 struct UploadFailure {
     std::string state;
     std::string message;
+    std::string notice;
 };
 
 UploadFailure upload_play(Api& api, const std::string& token, const std::string& mix, const Play& play) {
@@ -15,12 +17,21 @@ UploadFailure upload_play(Api& api, const std::string& token, const std::string&
         api.upload(token, mix, play);
         return {};
     } catch (const HttpError& error) {
-        bool retryable = error.status == 401 || error.status == 403 || error.status == 429;
-        bool rejected =
-            error.status == 400 || error.status == 404 || error.status == 409 || error.status == 422;
-        return {retryable ? "queued" : rejected ? "rejected" : "uncertain", error.what()};
+        if (error.status == 401 || error.status == 403) {
+            return {"queued", error.what(), "auth"};
+        }
+
+        if (error.status == 429) {
+            return {"queued", error.what(), "retry"};
+        }
+
+        if (error.status == 400 || error.status == 404 || error.status == 409 || error.status == 422) {
+            return {"rejected", error.what(), "rejected"};
+        }
+
+        return {"uncertain", error.what(), "uncertain"};
     } catch (...) {
-        return {"uncertain", "Upload response lost. Checking PIU Scores before another upload."};
+        return {"uncertain", "Upload response lost. Checking PIU Scores before another upload.", "uncertain"};
     }
 }
 } // namespace
@@ -192,6 +203,7 @@ void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::s
         tokens_[i] = inputs[i].token;
         best_[i].clear();
         account_status_[i].clear();
+        account_feedback_[i].clear();
     }
 
     ++generation_;
@@ -204,22 +216,40 @@ void Engine::configure(const std::array<AccountInput, 2>& accounts, const std::s
 
 void Engine::capture(const Result& result, uint64_t written) {
     std::lock_guard lock(gate_);
+    if (!config_.sync || result.side < 1 || result.side > 2 || result.id.empty() || result.id.size() > 128) {
+        return;
+    }
+
+    feedback_.observe(result, "checking", written);
+    auto receipt = data_.receipts.find(result.id);
+    if (receipt != data_.receipts.end()) {
+        feedback_.update(result.id, receipt->second);
+        return;
+    }
+
+    auto pending = std::find_if(data_.pending.begin(), data_.pending.end(), [&](const auto& item) {
+        return item.result.id == result.id;
+    });
+    if (pending != data_.pending.end()) {
+        auto code = pending->state == "queued" ? account_feedback_[pending->account] : pending->state;
+        feedback_.update(result.id, code.empty() ? "checking" : code);
+        return;
+    }
+
     int account = account_for(result.profile);
-    if (!config_.sync || account < 0 || result.ambiguous || result.side < 1 || result.side > 2 ||
-        written <= config_.capture_after || result.id.empty() || result.id.size() > 128 ||
-        data_.receipts.contains(result.id) ||
-        std::any_of(data_.pending.begin(), data_.pending.end(), [&](const auto& item) {
-            return item.result.id == result.id;
-        })) {
+    if (result.ambiguous || account < 0 || written <= config_.capture_after) {
+        feedback_.update(result.id, result.ambiguous ? "ambiguous" : account < 0 ? "unlinked" : "expired");
         return;
     }
 
     auto previous = data_;
     if (!result.eligible || result.score < 0 || result.score > 1000000) {
         data_.receipts[result.id] = "skipped";
+        feedback_.update(result.id, "skipped");
         status_ = "Skipped a result with unsupported chart, modifiers, or autoplay.";
     } else {
         data_.pending.push_back({result, config_.mix, iso_time(written), "queued", account});
+        feedback_.update(result.id, "checking");
         sync_due_ = true;
     }
 
@@ -227,6 +257,7 @@ void Engine::capture(const Result& result, uint64_t written) {
         save_store(folder_, data_);
     } catch (...) {
         data_ = std::move(previous);
+        feedback_.update(result.id, "storage");
         throw;
     }
 
@@ -264,6 +295,12 @@ void Engine::discard_pending(size_t account) {
         return item.account == static_cast<int>(account);
     });
     save_store(folder_, next);
+    for (const auto& item : data_.pending) {
+        if (item.account == static_cast<int>(account)) {
+            feedback_.update(item.result.id, "discarded");
+        }
+    }
+
     data_ = std::move(next);
     ++generation_;
 }
@@ -274,6 +311,7 @@ void Engine::poll() {
         return;
     }
 
+    publish_feedback();
     auto frame = feed_ ? feed_(config.game_root) : mailbox_.poll(config.game_root);
     if (!frame) {
         return;
@@ -325,7 +363,9 @@ void Engine::poll() {
                     if (completed_results.size() == 2 &&
                         (same_profile(completed_results[0].profile, completed_results[1].profile) ||
                             completed_results[0].side == completed_results[1].side)) {
-                        return;
+                        for (auto& result : completed_results) {
+                            result.ambiguous = true;
+                        }
                     }
 
                     for (const auto& result : completed_results) {
@@ -339,6 +379,33 @@ void Engine::poll() {
     }
 }
 
+void Engine::publish_feedback() {
+    fs::path path;
+    std::string text;
+    {
+        std::lock_guard lock(gate_);
+        if (!config_.sync || config_.game_root.empty()) {
+            return;
+        }
+
+        path = GameHook::exports(config_.game_root) / L"status.txt";
+        text = feedback_.snapshot();
+    }
+
+    if (text == published_feedback_ && path == feedback_path_) {
+        return;
+    }
+
+    try {
+        safe_path(path);
+        atomic_write(path, text);
+        published_feedback_ = std::move(text);
+        feedback_path_ = std::move(path);
+    } catch (...) {
+        // Notifications must never prevent capture or uploads. Retry on the next poll.
+    }
+}
+
 void Engine::replace_scores(size_t account, const std::vector<Score>& scores) {
     best_[account].clear();
     for (const auto& score : scores) {
@@ -348,7 +415,8 @@ void Engine::replace_scores(size_t account, const std::vector<Score>& scores) {
 
 void Engine::complete(size_t index, const std::string& outcome) {
     auto previous = data_;
-    data_.receipts[data_.pending[index].result.id] = outcome;
+    auto id = data_.pending[index].result.id;
+    data_.receipts[id] = outcome;
     data_.pending.erase(data_.pending.begin() + static_cast<ptrdiff_t>(index));
     try {
         save_store(folder_, data_);
@@ -356,6 +424,8 @@ void Engine::complete(size_t index, const std::string& outcome) {
         data_ = std::move(previous);
         throw;
     }
+
+    feedback_.update(id, outcome);
 }
 
 void Engine::sync() {
@@ -365,12 +435,29 @@ void Engine::sync() {
         try {
             sync_account(account);
         } catch (...) {
+            auto error = std::current_exception();
+            std::string code = "retry";
+            try {
+                std::rethrow_exception(error);
+            } catch (const HttpError& failure) {
+                if (failure.status == 401 || failure.status == 403) {
+                    code = "auth";
+                }
+            } catch (...) {
+            }
+
             if (!first_error) {
                 first_error = std::current_exception();
             }
 
             std::lock_guard lock(gate_);
             account_status_[account] = "PIU Scores unavailable; will retry";
+            account_feedback_[account] = code;
+            for (const auto& item : data_.pending) {
+                if (item.account == static_cast<int>(account) && item.state == "queued") {
+                    feedback_.update(item.result.id, code);
+                }
+            }
         }
     }
 
@@ -413,6 +500,7 @@ void Engine::sync_account(size_t account) {
 
         replace_scores(account, scores);
         account_status_[account] = "Connected";
+        account_feedback_[account].clear();
         status_ = config_.sync ? "Connected. PB syncing is enabled." : "Connected. OBS overlay only.";
         if (!config_.sync) {
             return;
@@ -465,6 +553,7 @@ void Engine::sync_account(size_t account) {
                 throw;
             }
 
+            feedback_.update(item.result.id, "sending");
             event = item.result.id;
             play = {id, item.result.score, item.result.broken, item.played_at, item.result.plate};
         }
@@ -479,6 +568,8 @@ void Engine::sync_account(size_t account) {
             if (!failure.state.empty()) {
                 data_.pending[index].state = failure.state;
                 save_store(folder_, data_);
+                feedback_.update(event, failure.notice);
+                account_feedback_[account] = failure.notice;
                 account_status_[account] = failure.message;
                 status_ = failure.message;
                 break;

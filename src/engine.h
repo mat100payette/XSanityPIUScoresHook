@@ -1,6 +1,7 @@
 #pragma once
 #include "api.h"
 #include "mailbox.h"
+#include "result_feedback.h"
 #include <condition_variable>
 
 namespace piu {
@@ -13,6 +14,10 @@ class Engine {
     std::mutex sync_gate_;
     Preferences config_;
     Store data_;
+    ResultFeedback feedback_;
+    std::string published_feedback_;
+    fs::path feedback_path_;
+    std::array<std::string, 2> account_feedback_;
     std::array<std::string, 2> tokens_;
     std::array<std::string, 2> account_status_;
     std::array<std::string, 2> live_profiles_;
@@ -34,6 +39,7 @@ class Engine {
     void replace_scores(size_t account, const std::vector<Score>& scores);
     void sync_account(size_t account);
     int account_for(const std::string& profile) const;
+    void publish_feedback();
     void poll_loop();
     void sync_loop();
 

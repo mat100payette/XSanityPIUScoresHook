@@ -343,6 +343,7 @@ struct HookUpgradeFixture {
         save_store(paths.state, queue);
         atomic_write(GameHook::exports(game) / L"current.json", encode(result_json(result("old-current"))));
         atomic_write(GameHook::exports(game) / L"result.json", encode(result_json(result("old-result"))));
+        atomic_write(GameHook::exports(game) / L"status.txt", "PIUCOMPANION 1\nold-result\taccepted\n");
         atomic_write(GameHook::exports(game) / L"keep.txt", "unrelated export file");
     }
 };
@@ -811,6 +812,7 @@ void hook_upgrade_checks() {
         "exporter replacement resets cutoff while preserving account, settings and pending uploads");
     check(!fs::exists(GameHook::exports(sequential.game) / L"current.json") &&
               !fs::exists(GameHook::exports(sequential.game) / L"result.json") &&
+              !fs::exists(GameHook::exports(sequential.game) / L"status.txt") &&
               read(GameHook::exports(sequential.game) / L"keep.txt") == "unrelated export file",
         "exporter replacement clears only transient result and current-chart payloads");
 

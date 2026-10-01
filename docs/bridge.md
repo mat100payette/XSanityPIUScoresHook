@@ -24,6 +24,14 @@ The actor preallocates exactly 1,024 numeric Lua array entries and never resizes
 
 JSON contains the existing single-player `current` state, a `players` array of live side/profile names, and optionally a `results` array (at most two) plus its `completed` game-clock time. Each result includes its side and the profile name captured at the start of that attempt. Profile changes invalidate the attempt; duplicate names or profile GUIDs cannot produce account uploads. The companion matches names case-insensitively without fuzzy matching and stores the chosen account index with each pending result. The reader also accepts the previous singular result envelope during upgrades; a result without an explicitly matched profile cannot enter a new queue. The native side estimates completion time from the observed heartbeat and elapsed game time. It applies the existing capture cutoff, validation, deduplication, and website-PB comparison before upload.
 
+## Result feedback
+
+While syncing, the companion atomically replaces `Save/PiuCompanion/status.txt` only when an outcome changes. The data-only format starts with `PIUCOMPANION 1` followed by up to two `event-id<TAB>status-code` lines. It contains no keys, profile names, or score payloads. Entries expire after two minutes. Setup clears the file on hook replacement, relocation, component removal, or uninstall along with the other managed transient files.
+
+The system overlay reads at most 512 bytes twice per second on `ScreenEvaluation`, refreshing only that directory's file cache. It displays fixed local messages for known codes and exact attempt IDs; it never evaluates file contents. Missing feedback gets a neutral unavailable message after eight seconds. Read, write, or display failures cannot block capture or uploads. Overlay-only mode creates neither result cards nor feedback files.
+
+Acceptance is reported after the upload receipt is saved. Offline reads, credential errors, rejected uploads, and uncertain POST responses remain distinct; notifications do not change queue or retry policy. Tests exercise the native upload path, actual feedback file, and shipped Lua notification logic across processes. Live in-game rendering still requires acceptance testing.
+
 ## Plates and play eligibility
 
 The result's optional `plate` is derived from the same tap and hold-checkpoint judgements used by xsanity's evaluation screen. It survives offline queuing and is sent as `award` in [PIU Scores' observed-play API](https://piuscores.arroweclip.se/swagger/index.html). Failed stages omit it. Scores are still submitted only when they improve the website PB; old accepted plays are not reconstructed or resubmitted.

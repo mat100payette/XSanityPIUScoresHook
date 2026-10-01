@@ -3,6 +3,7 @@ local file = assert(io.open(source, "rb"))
 local source_code = file:read("*a")
 file:close()
 local passed = 0
+local actor_fixture = dofile(arg[0]:gsub("[^/\\]+$", "actors.lua"))
 
 local function check(value, message)
     assert(value, message)
@@ -181,6 +182,12 @@ local function fixture(options)
             end,
         },
     }, { __index = _G })
+    local mount = actor_fixture(env, function()
+        if options.file_error then
+            error("Feedback unavailable")
+        end
+        return game.feedback
+    end)
     local code = source_code
     if options.overlay_only then
         code = code:gsub("local capture_results = true", "local capture_results = false")
@@ -235,7 +242,8 @@ local function fixture(options)
         options.clock_error or game.current:find('"initializing":true', 1, true),
         "loading is observable before actor initialization"
     )
-    actor.InitCommand(actor)
+    mount(actor)
+    game.cards = actor[2]
     decode()
     if not options.clock_error then
         assert(type(game.update) == "function", "initialization registers the live update callback")
@@ -491,5 +499,52 @@ check(
 )
 game:tick("ScreenSelectMusic", 61)
 check(not game.result, "completed payload expires from the transient mailbox")
-check(RageFileUtil == nil and lua == nil, "hook runs with no file or logging APIs")
+local feedback_game = fixture({ players = 2 })
+feedback_game:tick("ScreenGameplay")
+feedback_game:tick("ScreenEvaluation")
+local ids = {}
+for id in feedback_game.result:gmatch('"id":"(.-)"') do
+    ids[#ids + 1] = id
+end
+local function message(side)
+    return feedback_game.cards[side]:GetChild("Message").values.settext[1]
+end
+check(message(1) == "Checking PIU Scores...", "notification waits for a real companion outcome")
+feedback_game.feedback = "PIUCOMPANION 1\n" .. ids[1] .. "\taccepted\n" .. ids[2] .. "\tauth\n"
+feedback_game:tick("ScreenEvaluation", 0.5)
+check(
+    message(1) == "PB submitted" and message(2) == "Check your API key in the companion",
+    "each result card receives only its own outcome"
+)
+feedback_game.feedback = "PIUCOMPANION 1\nold-event\tretry\n"
+feedback_game:tick("ScreenEvaluation", 0.5)
+check(message(1) == "PB submitted", "unrelated or delayed feedback cannot replace the current outcome")
+feedback_game:tick("ScreenSelectMusic")
+check(
+    not feedback_game.cards[1].values.visible[1] and not feedback_game.cards[2].values.visible[1],
+    "notifications are hidden outside the result screen"
+)
+feedback_game:tick("ScreenGameplay")
+feedback_game:tick("ScreenEvaluation", 1)
+check(message(1) == "Checking PIU Scores...", "a new attempt cannot reuse the previous success")
+feedback_game.feedback = string.rep("x", 513)
+feedback_game:tick("ScreenEvaluation", 9)
+check(
+    message(1) == "Sync status unavailable - check companion",
+    "missing or oversized feedback never claims a saved score"
+)
+feedback_game.feedback = "PIUCOMPANION 1\n" .. feedback_game.result:match('"id":"(.-)"') .. "\tretry\n"
+feedback_game:tick("ScreenEvaluation", 0.5)
+check(message(1) == "Saved - will retry", "late feedback replaces the unavailable state")
+local display_failure = fixture({ file_error = true })
+display_failure:tick("ScreenGameplay")
+display_failure:tick("ScreenEvaluation")
+check(
+    display_failure.result ~= nil and #display_failure.messages == 0,
+    "notification file failures cannot interrupt result capture or spam game errors"
+)
+local overlay_notifications = fixture({ overlay_only = true })
+overlay_notifications:tick("ScreenGameplay")
+overlay_notifications:tick("ScreenEvaluation")
+check(#overlay_notifications.cards == 0, "overlay-only mode creates no notification cards")
 print(passed .. " Lua behavioral assertions passed (fixture invariants also checked). Simulated game only.")

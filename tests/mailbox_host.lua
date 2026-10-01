@@ -136,11 +136,20 @@ STATSMAN = {
         }
     end,
 }
+local mount = dofile(arg[0]:gsub("[^/\\]+$", "actors.lua"))(_G, function()
+    local file = io.open(arg[2] .. "/Save/PiuCompanion/status.txt", "rb")
+    if not file then
+        return nil
+    end
+    local text = file:read(513)
+    file:close()
+    return text
+end)
 local actor = assert(loadfile(arg[1]))()
 function actor:SetUpdateFunction(callback)
     self.update = callback
 end
-actor.InitCommand(actor)
+mount(actor)
 for command in io.lines() do
     if command == "quit" then
         break
@@ -155,5 +164,11 @@ for command in io.lines() do
     end
     clock = clock + 1
     actor.update(actor, 1)
+    local output = assert(io.open(arg[2] .. "/notifications.txt", "wb"))
+    for _, card in ipairs(actor[2]) do
+        local text = card:GetChild("Message").values.settext
+        output:write(card.values.visible[1] and text and text[1] or "hidden", "\n")
+    end
+    output:close()
     collectgarbage("collect")
 end

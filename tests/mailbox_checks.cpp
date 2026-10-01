@@ -72,7 +72,8 @@ void live_checks() {
     startup.hStdInput = input.get();
     startup.hStdOutput = startup.hStdError = output.get();
     auto args = L"\"" + game.wstring() + L"\" \"" + (repo / L"tests/mailbox_host.lua").wstring() + L"\" \"" +
-                (repo / L"hook/ScreenSystemLayer overlay.lua").wstring() + L"\"";
+                (repo / L"hook/ScreenSystemLayer overlay.lua").wstring() + L"\" \"" + folder.wstring() +
+                L"\"";
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(game.c_str(),
             args.data(),
@@ -186,6 +187,10 @@ void live_checks() {
               str(uploads[0].second, L"chartId") == "s16" && number(uploads[0].second, L"score") == 980002 &&
               str(uploads[0].second, L"award") == "TG",
         "P2 posts its own chart, score and plate while P1 remains offline");
+    wait_for([&] {
+        return read(folder / L"notifications.txt") == "Saved - will retry\nPB submitted\n";
+    });
+    check(true, "native feedback returns through the real Lua hook into the two result cards");
     Engine restarted(state, api);
     restarted.load();
     check(restarted.pending_count(0) == 1 && restarted.pending_count(1) == 0,
@@ -239,6 +244,16 @@ void live_checks() {
     restarted.sync();
     check(uploads.size() == 5 && uploads.back().first == "bob-key",
         "only the eligible player's result reaches the upload transport");
+    until = GetTickCount64() + 10000;
+    std::string rendered;
+    do {
+        restarted.poll();
+        command("tick\n");
+        Sleep(30);
+        rendered = read(folder / L"notifications.txt");
+    } while (rendered != "PB submitted\nNot submitted - unsupported play\n" && GetTickCount64() < until);
+    check(rendered == "PB submitted\nNot submitted - unsupported play\n",
+        "swapped result cards show the correct accepted and unsupported outcomes");
     DWORD written = 0;
     WriteFile(commands.get(), "quit\n", 5, &written, nullptr);
     check(WaitForSingleObject(child.get(), 5000) == WAIT_OBJECT_0, "child exits normally");

@@ -27,6 +27,12 @@ When upgrading from a single-account version, your existing key is retained as *
 
 Profile/key changes are blocked while that account has pending uploads. Let them finish, or explicitly **Discard pending...** for that account if you no longer want them. Discarded scores are not recovered from game history.
 
+## Result notifications
+
+With syncing enabled, each player's results screen shows a small PIU Scores status card: submitted, website PB already up to date, saved for retry, or a specific reason it could not sync. Cards follow the current play and disappear when you leave the results screen.
+
+**PB submitted** means PIU Scores confirmed the upload. **Upload unconfirmed** means its response was lost; check the website before taking action. **Sync status unavailable** means the game has no feedback from the companion and cannot confirm whether the score was saved.
+
 ## Set up the OBS overlay
 
 With **OBS overlay** installed, add a **Browser Source** in OBS:

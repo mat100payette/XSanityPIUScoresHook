@@ -575,7 +575,7 @@ void Installer::apply(
         }
 
         if (remove_old) {
-            for (auto file : {L"current.json", L"result.json"}) {
+            for (auto file : {L"current.json", L"result.json", L"status.txt"}) {
                 auto path = GameHook::exports(old_root) / file;
                 if (fs::exists(path)) {
                     transaction.remove(path);
@@ -590,7 +590,7 @@ void Installer::apply(
             }
 
             if (replace_hook || moving) {
-                for (auto file : {L"current.json", L"result.json"}) {
+                for (auto file : {L"current.json", L"result.json", L"status.txt"}) {
                     auto path = GameHook::exports(root) / file;
                     if (fs::exists(path)) {
                         transaction.remove(path);

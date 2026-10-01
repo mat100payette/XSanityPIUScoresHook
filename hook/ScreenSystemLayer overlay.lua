@@ -307,6 +307,143 @@ local function update_profiles()
     profiles = "[" .. table.concat(list, ",") .. "]"
 end
 
+-- A tiny data-only return channel. Never execute the file as Lua or expose API details.
+local feedback_path = "/Save/PiuCompanion/status.txt"
+local messages = {
+    checking = { "Checking PIU Scores...", "#ACBCD0" },
+    sending = { "Submitting PB...", "#ACBCD0" },
+    accepted = { "PB submitted", "#68DBAA" },
+    covered = { "Website PB is up to date", "#ACBCD0" },
+    retry = { "Saved - will retry", "#FFD078" },
+    auth = { "Check your API key in the companion", "#FFA295" },
+    uncertain = { "Upload unconfirmed - check PIU Scores", "#FFD078" },
+    rejected = { "Upload rejected - check PIU Scores", "#FFA295" },
+    unlinked = { "Not submitted - profile not linked", "#FFD078" },
+    ambiguous = { "Not submitted - duplicate profile", "#FFD078" },
+    skipped = { "Not submitted - unsupported play", "#FFD078" },
+    unmatched = { "Not submitted - chart not found", "#FFD078" },
+    expired = { "Not submitted - account settings changed", "#FFD078" },
+    discarded = { "Pending score discarded", "#ACBCD0" },
+    storage = { "Could not save score - check companion", "#FFA295" },
+    unavailable = { "Sync status unavailable - check companion", "#FFD078" },
+    capture_error = { "Could not read this result", "#FFA295" },
+}
+local notices, cards = {}, {}
+local feedback_elapsed, result_started = 0, 0
+
+local function read_feedback()
+    FILEMAN:FlushDirCache("/Save/PiuCompanion/")
+    local file = RageFileUtil.CreateRageFile()
+    local ok, text = pcall(function()
+        if not file:Open(feedback_path, 1) or file:GetFileSize() > 512 then
+            return nil
+        end
+
+        return file:Read()
+    end)
+    file:destroy()
+    if not ok or type(text) ~= "string" or text:sub(1, #"PIUCOMPANION 1\n") ~= "PIUCOMPANION 1\n" then
+        return
+    end
+
+    local found = {}
+    for id, code in text:gmatch("([%w_-]+)\t([a-z_]+)\n") do
+        if messages[code] then
+            found[id] = code
+        end
+    end
+    for _, notice in pairs(notices) do
+        if notice.id and found[notice.id] then
+            notice.code = found[notice.id]
+            notice.received = true
+        end
+    end
+end
+
+local function update_notifications(screen, delta)
+    if not capture_results then
+        return
+    end
+
+    feedback_elapsed = feedback_elapsed + delta
+    if screen == "ScreenEvaluation" and feedback_elapsed >= 0.5 then
+        pcall(read_feedback)
+        feedback_elapsed = 0
+    end
+    for side, card in pairs(cards) do
+        local notice = screen == "ScreenEvaluation" and notices[side] or nil
+        if
+            notice
+            and notice.code == "checking"
+            and not notice.received
+            and GetTimeSinceStart() - result_started >= 8
+        then
+            notice.code = "unavailable"
+        end
+
+        local code = notice and notice.code or nil
+        if card.code ~= code then
+            card.actor:stoptweening()
+            if code then
+                local message = messages[code]
+                card.actor:GetChild("Message"):settext(message[1]):diffuse(color(message[2]))
+                card.actor:GetChild("Accent"):diffuse(color(message[2]))
+                if not card.code then
+                    card.actor:visible(true):diffusealpha(0):linear(0.18):diffusealpha(1)
+                end
+            else
+                card.actor:visible(false)
+            end
+            card.code = code
+        end
+    end
+end
+
+local function notification_actors()
+    local frame = Def.ActorFrame({})
+    if not capture_results then
+        return frame
+    end
+
+    local width = math.min(380, SCREEN_WIDTH * 0.42)
+    for side = 1, 2 do
+        local player_side = side
+        frame[#frame + 1] = Def.ActorFrame({
+            InitCommand = function(self)
+                self:xy(SCREEN_WIDTH * (player_side == 1 and 0.25 or 0.75), SCREEN_HEIGHT - 48):visible(false)
+                cards[player_side] = { actor = self }
+            end,
+            Def.Quad({
+                InitCommand = function(self)
+                    self:zoomto(width, 48):diffuse(color("#111925")):diffusealpha(0.94)
+                end,
+            }),
+            Def.Quad({
+                Name = "Accent",
+                InitCommand = function(self)
+                    self:x(-width / 2 + 1.5):zoomto(3, 48)
+                end,
+            }),
+            LoadFont("Common Normal") .. {
+                InitCommand = function(self)
+                    self:xy(-width / 2 + 14, -12)
+                        :halign(0)
+                        :zoom(0.38)
+                        :diffuse(color("#B1BDCC"))
+                        :settext("P" .. player_side .. "  /  PIU SCORES")
+                end,
+            },
+            LoadFont("Common Normal") .. {
+                Name = "Message",
+                InitCommand = function(self)
+                    self:xy(-width / 2 + 14, 7):halign(0):zoom(0.58):maxwidth((width - 28) / 0.58)
+                end,
+            },
+        })
+    end
+    return frame
+end
+
 local function tick(delta)
     tick_error = nil
     heartbeat = heartbeat + delta
@@ -315,6 +452,7 @@ local function tick(delta)
     if screen == "ScreenGameplay" then
         if lastScreen ~= screen then
             active = {}
+            notices = {}
             count = count + 1
             for side, player in ipairs(players) do
                 local ok, value = pcall(chart, player, side)
@@ -351,14 +489,21 @@ local function tick(delta)
         end
     elseif capture_results and screen == "ScreenEvaluation" and lastScreen == "ScreenGameplay" then
         local results = {}
+        notices = {}
+        result_started = GetTimeSinceStart()
+        feedback_elapsed = 0.5
         for side = 1, 2 do
             if active[side] then
                 local ok, value = pcall(capture, active[side])
                 if ok then
                     results[#results + 1] = value
+                    notices[side] = { id = active[side].id, code = "checking" }
                 else
+                    notices[side] = { code = "capture_error" }
                     report_error("P" .. tostring(side) .. ": " .. tostring(value))
                 end
+            elseif GAMESTATE:IsHumanPlayer(players[side]) then
+                notices[side] = { code = "skipped" }
             end
         end
         if #results > 0 then
@@ -387,6 +532,8 @@ local function tick(delta)
         end
         heartbeat = 0
     end
+    -- Display failures cannot invalidate a captured result or interrupt the game.
+    pcall(update_notifications, screen, delta)
     lastScreen = screen
 end
 
@@ -402,8 +549,10 @@ if not fallback_ok then
     error(fallback)
 end
 
+local notifications_ok, notifications = pcall(notification_actors)
 return Def.ActorFrame({
     fallback,
+    notifications_ok and notifications or Def.ActorFrame({}),
     InitCommand = function(self)
         local ok, detail = pcall(function()
             session = tostring(math.floor(GetTimeSinceStart() * 1000))
@@ -424,6 +573,7 @@ return Def.ActorFrame({
                         c.eligible = false
                     end
 
+                    pcall(update_notifications, "", 0)
                     retry = 1
                     report_error(update_error)
                 end
