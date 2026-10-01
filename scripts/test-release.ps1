@@ -42,6 +42,13 @@ Set-Item Function:gh -Value {
     $global:LASTEXITCODE = 0
     switch ($args[1]) {
         'list' {
+            # A PowerShell function mock preserves nested arrays; an executable expands them.
+            # Git's argument echo exercises that native boundary without contacting GitHub.
+            $nativeArgs = & $git rev-parse --sq-quote @args
+            if ($LASTEXITCODE -ne 0 -or $nativeArgs.Trim() -cne
+                    "'release' 'list' '--limit' '100' '--json' 'tagName,isDraft'") {
+                throw 'Release list must pass --json fields as one native argument.'
+            }
             if ($ghState.ReleaseState -eq 'absent') { return '[]' }
             return (@{ tagName = 'v0.5.5'; isDraft = ($ghState.ReleaseState -eq 'draft') } | ConvertTo-Json -Compress)
         }

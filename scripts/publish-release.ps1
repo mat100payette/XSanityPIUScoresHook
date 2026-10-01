@@ -40,7 +40,7 @@ try {
         throw 'Release installer checksum does not match.'
     }
 
-    $releases = Invoke-Gh release list --limit 100 --json tagName,isDraft
+    $releases = Invoke-Gh release list --limit 100 --json 'tagName,isDraft'
     $existing = $releases | ConvertFrom-Json | Where-Object { $_.tagName -eq $Tag }
     if ($existing -and -not $existing.isDraft) { throw "$Tag is already published; it will not be overwritten." }
 
