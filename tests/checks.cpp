@@ -13,6 +13,7 @@
 using namespace piu;
 
 int update_checks();
+int mailbox_checks();
 int update_network_check();
 
 namespace {
@@ -37,6 +38,24 @@ template <typename F> void rejects(F&& action, const char* label) {
     check(rejected, label);
 }
 
+void rename_fixture(const fs::path& source, const fs::path& destination) {
+    auto deadline = GetTickCount64() + 1500;
+    std::error_code error;
+    do {
+        fs::rename(source, destination, error);
+        if (!error) {
+            return;
+        }
+
+        if (error.value() != ERROR_ACCESS_DENIED && error.value() != ERROR_SHARING_VIOLATION) {
+            break;
+        }
+
+        Sleep(25);
+    } while (GetTickCount64() < deadline);
+    throw fs::filesystem_error("Move isolated fixture", source, destination, error);
+}
+
 struct Fixture {
     fs::path root;
 
@@ -51,6 +70,10 @@ struct Fixture {
     }
 
     ~Fixture() {
+        if (std::uncaught_exceptions()) {
+            std::cerr << "Failure in fixture: " << root.filename().string() << "\n";
+        }
+
         std::error_code ignored;
         fs::remove_all(root, ignored);
     }
@@ -126,16 +149,61 @@ void write_current(const fs::path& game, const Result& value, bool playing = tru
     atomic_write(GameHook::exports(game) / L"current.json", encode(data));
 }
 
+std::optional<ExportFrame> fake_export(const fs::path& game) {
+    auto current = GameHook::exports(game) / L"current.json";
+    if (!fs::exists(current)) {
+        return {};
+    }
+
+    Object packet;
+    packet.Insert(L"current", parse(read(current)));
+    auto result = GameHook::exports(game) / L"result.json";
+    if (fs::exists(result)) {
+        packet.Insert(L"result", parse(read(result)));
+        packet.Insert(L"completed", Value::CreateNumberValue(0));
+    }
+
+    return ExportFrame{encode(packet), 0, 2, modified(current)};
+}
+
+void file_replacement_checks() {
+    Fixture fixture("file-replacement");
+    auto path = fixture.root / L"state.json";
+    atomic_write(path, "previous");
+    HANDLE held = CreateFileW(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    check(held != INVALID_HANDLE_VALUE, "file replacement fixture holds a read lock");
+    std::exception_ptr error;
+    std::thread writer([&] {
+        try {
+            atomic_write(path, "updated");
+        } catch (...) {
+            error = std::current_exception();
+        }
+    });
+    Sleep(100);
+    bool intact = read(path) == "previous";
+    CloseHandle(held);
+    writer.join();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+
+    check(intact && read(path) == "updated",
+        "atomic replacement tolerates a temporary reader without losing old data");
+}
+
 void engine_checks() {
     Fixture fixture("engine");
     auto game = fixture.game(), state = fixture.root / L"state";
     configure_fixture(state, game);
     FakeApi api;
     api.records = {{"chart-id", 900000, false}};
-    Engine engine(state, api);
+    Engine engine(state, api, fake_export);
     engine.load();
     engine.sync();
     auto value = result();
+    value.plate = "TG";
     write_current(game, value);
     engine.poll();
     auto overlay = parse(engine.state());
@@ -150,17 +218,21 @@ void engine_checks() {
     check(number(parse(engine.state()), L"pb") == 900000, "captured result cannot become overlay PB");
     check(engine.store().pending.size() == 1 && engine.store().pending[0].played_at == iso_time(written),
         "actual export time is stored as completion time");
+    check(load_store(state).pending[0].result.plate == "TG", "plate survives persistence for offline retry");
+    auto legacy_result = result_from_json(parse(
+        R"({"id":"old","title":"Song","type":"Single","difficulty":"S10","level":10,"score":900000,"eligible":true})"));
+    check(legacy_result.plate.empty(), "pending results from previous versions have no invented plate");
     engine.capture(value, written);
     check(engine.store().pending.size() == 1, "same result is captured once");
     engine.sync();
     check(api.plays.size() == 1 && api.plays[0].chart_id == "chart-id" && api.plays[0].score == 950000 &&
-              api.plays[0].played_at == iso_time(written),
+              api.plays[0].played_at == iso_time(written) && api.plays[0].plate == "TG",
         "new PB uploads exact score, chart and completion time");
     check(engine.store().pending.empty() && engine.store().receipts.at(value.id) == "accepted",
         "confirmed result payload is removed");
     check(read(state / L"uploads.json").find("950000") == std::string::npos,
         "receipt retains no score payload");
-    Engine restarted(state, api);
+    Engine restarted(state, api, fake_export);
     restarted.load();
     restarted.capture(value, written);
     restarted.sync();
@@ -215,14 +287,14 @@ void engine_checks() {
     Preferences blank;
     blank.game_root = game;
     save_preferences(no_token_state, blank);
-    Engine no_token(no_token_state, api);
+    Engine no_token(no_token_state, api, fake_export);
     no_token.load();
     no_token.capture(value, now());
     check(no_token.store().pending.empty(), "no token means no score capture");
     auto read_only_state = fixture.root / L"overlay-only";
     configure_fixture(read_only_state, game, false, true);
     FakeApi read_only_api;
-    Engine read_only(read_only_state, read_only_api);
+    Engine read_only(read_only_state, read_only_api, fake_export);
     read_only.load();
     atomic_write(GameHook::exports(game) / L"result.json", encode(result_json(result("overlay-only"))));
     read_only.poll();
@@ -233,16 +305,33 @@ void engine_checks() {
         "overlay-only never captures or uploads results");
     auto sync_state = fixture.root / L"sync-only";
     configure_fixture(sync_state, game, true, false);
-    Engine sync_only(sync_state, api);
+    Engine sync_only(sync_state, api, fake_export);
     sync_only.load();
+    check(sync_only.status().find("Waiting for XSanity exports") != std::string::npos,
+        "missing exporter cannot look like healthy syncing");
     sync_only.poll();
     check(!flag(parse(sync_only.state()), L"playing"), "sync-only has no overlay state");
+    check(sync_only.status().find("Waiting for XSanity exports") == std::string::npos,
+        "sync-only mode monitors the game heartbeat");
+    check(sync_only.status(now() + 200000000).find("Waiting for XSanity exports") != std::string::npos,
+        "stopped exporter becomes visible after heartbeat expires");
+    atomic_write(
+        GameHook::exports(game) / L"current.json", R"({"playing":false,"error":"test Lua failure"})");
+    sync_only.poll();
+    sync_only.sync();
+    check(sync_only.status() == "XSanity exporter: test Lua failure",
+        "successful API refresh cannot conceal a Lua error");
+    check(!flag(parse(sync_only.state()), L"playing"), "exporter diagnostics never become OBS content");
+    write_current(game, value);
+    sync_only.poll();
+    check(sync_only.status().find("test Lua failure") == std::string::npos,
+        "healthy heartbeat clears recovered exporter error");
     auto cutoff_state = fixture.root / L"cutoff";
     configure_fixture(cutoff_state, game);
     auto cutoff = load_preferences(cutoff_state);
     cutoff.capture_after = now();
     save_preferences(cutoff_state, cutoff);
-    Engine cutoff_engine(cutoff_state, api);
+    Engine cutoff_engine(cutoff_state, api, fake_export);
     cutoff_engine.load();
     cutoff_engine.capture(value, cutoff.capture_after - 1);
     check(cutoff_engine.store().pending.empty(), "enabling sync cannot import a stale exported result");
@@ -253,7 +342,7 @@ void engine_checks() {
     configure_fixture(paused_state, game);
     FakeApi offline;
     offline.offline = true;
-    Engine queued(paused_state, offline);
+    Engine queued(paused_state, offline, fake_export);
     queued.load();
     queued.capture(value, now());
     rejects(
@@ -280,7 +369,7 @@ void engine_checks() {
         configure_fixture(error_state, game);
         FakeApi failing;
         failing.upload_error = code;
-        Engine uncertain(error_state, failing);
+        Engine uncertain(error_state, failing, fake_export);
         uncertain.load();
         uncertain.capture(value, now());
         uncertain.sync();
@@ -308,7 +397,7 @@ void engine_checks() {
     interrupted.pending.push_back({value, "Phoenix", iso_time(now()), "sending"});
     save_store(crash_state, interrupted);
     FakeApi crash_api;
-    Engine crash(crash_state, crash_api);
+    Engine crash(crash_state, crash_api, fake_export);
     crash.load();
     crash.sync();
     check(crash.store().pending[0].state == "uncertain" && crash_api.plays.empty(),
@@ -317,7 +406,7 @@ void engine_checks() {
     configure_fixture(refresh_state, game);
     FakeApi refresh;
     refresh.fail_scores_at = 2;
-    Engine accepted(refresh_state, refresh);
+    Engine accepted(refresh_state, refresh, fake_export);
     accepted.load();
     accepted.capture(value, now());
     rejects(
@@ -332,7 +421,7 @@ void engine_checks() {
     FakeApi authority;
     authority.records = {{"chart-id", 800000, false}};
     authority.update_best = false;
-    Engine authoritative(authority_state, authority);
+    Engine authoritative(authority_state, authority, fake_export);
     authoritative.load();
     authoritative.capture(value, now());
     authoritative.sync();
@@ -405,6 +494,18 @@ void api_checks() {
         return parse(R"({"recorded":1})");
     });
     upload.upload("test", "Phoenix", {"uuid", 999000, false, iso_time(now())});
+    PiuScoresApi plates([](const std::string&, const std::string&, const std::optional<Object>& body) {
+        auto play = body->GetNamedArray(L"plays").GetAt(0).GetObject();
+        if (flag(play, L"isBroken")) {
+            check(!play.HasKey(L"award"), "failed stages never claim an award");
+        } else {
+            check(play.Size() == 5 && str(play, L"award") == "TG" && !play.HasKey(L"plate"),
+                "TALENTED GAME uses the documented award field, not plate or invented counts");
+        }
+        return parse(R"({"recorded":1})");
+    });
+    plates.upload("test", "Phoenix2", {"uuid", 970218, false, iso_time(now()), "TG"});
+    plates.upload("test", "Phoenix2", {"uuid", 970218, true, iso_time(now()), "TG"});
     PiuScoresApi unconfirmed([](const std::string&, const std::string&, const std::optional<Object>&) {
         return parse(R"({"recorded":0})");
     });
@@ -513,12 +614,16 @@ void installer_checks() {
     check(!installer.installed() && installer.selection().sync && !installer.selection().overlay,
         "fresh installer defaults to sync with overlay unchecked");
     auto layer = GameHook::layer(game);
+    auto owned = [&](const fs::path& path) {
+        return hook.owned(path, str(parse(read(paths.app / L"installation.json")), L"hookSha256"));
+    };
     installer.apply({game, true, false});
     auto config = load_preferences(paths.state);
-    check(installer.installed() && config.sync && !config.overlay && hook.owned(GameHook::layer(game)),
+    check(installer.installed() && config.sync && !config.overlay && owned(GameHook::layer(game)),
         "fresh sync-only installation creates shared layer");
-    check(hook.current(layer) &&
-              str(parse(read(paths.app / L"installation.json")), L"hookSha256") == hook.fingerprint(),
+    check(hook.configured(true, false).current(layer) &&
+              str(parse(read(paths.app / L"installation.json")), L"hookSha256") ==
+                  hook.configured(true, false).fingerprint(),
         "fresh setup installs the current exporter and records its fingerprint");
     check(host.values && fs::exists(paths.menu / L"Play XSanity.lnk") &&
               fs::exists(paths.menu / L"Manage installation.lnk"),
@@ -531,9 +636,15 @@ void installer_checks() {
     check(config.sync && config.overlay && unprotect(config.protected_token) == "existing-token",
         "add optional overlay without losing account settings");
     host.running = true;
+    rejects(
+        [&] {
+            installer.apply({game, true, false});
+        },
+        "component changes require the game closed before changing capture behavior");
+    host.running = false;
     installer.apply({game, true, false});
-    check(!load_preferences(paths.state).overlay && hook.owned(GameHook::layer(game)),
-        "remove overlay while game is open and keep syncing layer");
+    check(!load_preferences(paths.state).overlay && owned(GameHook::layer(game)),
+        "remove overlay and keep the syncing layer");
     Store queue;
     queue.pending.push_back({result(), "Phoenix", iso_time(now()), "queued"});
     save_store(paths.state, queue);
@@ -544,6 +655,7 @@ void installer_checks() {
     installer.apply({game, true, true});
     check(load_preferences(paths.state).capture_after >= config.capture_after,
         "reenabling sync establishes new export cutoff");
+    host.running = true;
     rejects(
         [&] {
             installer.apply({game, false, false});
@@ -557,7 +669,7 @@ void installer_checks() {
         "moving game connection requires game closed");
     host.running = false;
     installer.apply({game2, false, true});
-    check(!fs::exists(GameHook::layer(game)) && hook.owned(GameHook::layer(game2)),
+    check(!fs::exists(GameHook::layer(game)) && owned(GameHook::layer(game2)),
         "changing selected game moves only owned layer");
     atomic_write(paths.app / L"keep.txt", "foreign app file");
     atomic_write(paths.state / L"keep.txt", "foreign state file");
@@ -582,7 +694,7 @@ void installer_checks() {
         },
         "injected update failure triggers rollback");
     check(read(paths.state / L"settings.json") == settings_before &&
-              read(paths.app / L"installation.json") == marker_before && hook.owned(GameHook::layer(game)),
+              read(paths.app / L"installation.json") == marker_before && owned(GameHook::layer(game)),
         "failed update restores settings, marker and shared layer");
     host.fail_at = -1;
     host.fail_at = host.mutations + 4;
@@ -591,7 +703,7 @@ void installer_checks() {
             installer.apply({game, false, false});
         },
         "uninstall registration failure triggers rollback");
-    check(installer.installed() && host.values && hook.owned(GameHook::layer(game)) &&
+    check(installer.installed() && host.values && owned(GameHook::layer(game)) &&
               read(paths.state / L"settings.json") == settings_before,
         "failed uninstall restores registration and game layer");
     host.fail_at = -1;
@@ -604,7 +716,7 @@ void installer_checks() {
         "modified hook cannot be removed");
     check(read(GameHook::layer(game)) == "customized layer" && host.stops == before_stops,
         "conflict preflight leaves modified layer and running app untouched");
-    atomic_write(GameHook::layer(game), hook.source());
+    atomic_write(GameHook::layer(game), hook.configured(false, true).source());
     installer.apply({game, false, false});
     auto clean = fixture.root / L"new";
     InstallPaths new_paths{clean / L"app", clean / L"state", clean / L"menu"};
@@ -705,7 +817,7 @@ struct HookUpgradeFixture {
 
     void move_game() {
         auto destination = files.root / L"moved game";
-        fs::rename(game, destination);
+        rename_fixture(game, destination);
         game = destination;
     }
 
@@ -800,7 +912,7 @@ void hook_receipt_checks() {
 
 void hook_entrypoint_checks() {
     const GameHook first("return Def.ActorFrame {} -- synthetic installed exporter\n");
-    const GameHook latest;
+    const auto latest = GameHook{}.configured(true, false);
     for (int location : {0, 1, 2}) {
         HookUpgradeFixture fixture(("hook-entrypoint-" + std::to_string(location)).c_str());
         fixture.installer(first).apply({fixture.game, true, false});
@@ -809,7 +921,7 @@ void hook_entrypoint_checks() {
         auto old_root = fixture.game;
         auto marker_path = fixture.paths.app / L"installation.json";
         auto auxiliary = GameHook::layer(fixture.game).parent_path() / L"ScreenSystemLayer aux.lua";
-        fs::rename(GameHook::layer(fixture.game), auxiliary);
+        rename_fixture(GameHook::layer(fixture.game), auxiliary);
         auto marker = parse(read(marker_path));
         marker.Remove(L"hookFile");
         atomic_write(marker_path, encode(marker));
@@ -853,8 +965,8 @@ void hook_entrypoint_checks() {
 
         setup.apply({fixture.game, true, false});
         auto updated = parse(read(marker_path));
-        check(fs::is_directory(GameHook::exports(fixture.game)),
-            "entrypoint upgrade retains the empty destination export directory");
+        check(!fs::exists(GameHook::exports(fixture.game)),
+            "memory bridge removes the empty obsolete export directory");
         check(latest.current(GameHook::layer(fixture.game)) && !fs::exists(auxiliary) &&
                   !fs::exists(GameHook::layer(old_root).parent_path() / L"ScreenSystemLayer aux.lua") &&
                   str(updated, L"hookFile") == utf8(GameHook::LayerName),
@@ -2008,7 +2120,9 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         icon_checks();
+        file_replacement_checks();
         engine_checks();
+        passed += mailbox_checks();
         api_checks();
         passed += update_checks();
         installer_checks();

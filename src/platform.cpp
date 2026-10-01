@@ -91,8 +91,18 @@ void atomic_write(const fs::path& path, std::string_view bytes) {
             }
         }
 
-        if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            fail("Replace file");
+        auto deadline = GetTickCount64() + 1500;
+        while (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            auto error = GetLastError();
+            if ((error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) ||
+                GetTickCount64() >= deadline) {
+                throw Error("Replace file " + utf8(path.wstring()) + " failed (Windows error " +
+                            std::to_string(error) + ").");
+            }
+
+            // Antivirus and indexers can briefly hold a file without delete sharing.
+            // Keep the previous file intact and retry only the final atomic rename.
+            Sleep(25);
         }
     } catch (...) {
         std::error_code ignored;

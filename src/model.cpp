@@ -40,7 +40,8 @@ Result result_from_json(const Object& data) {
         game_chart(data),
         number(data, L"score"),
         flag(data, L"broken"),
-        flag(data, L"eligible")};
+        flag(data, L"eligible"),
+        str(data, L"plate")};
 }
 
 Object result_json(const Result& result) {
@@ -53,6 +54,10 @@ Object result_json(const Result& result) {
     put(data, L"score", result.score);
     put(data, L"broken", result.broken);
     put(data, L"eligible", result.eligible);
+    if (!result.plate.empty() && !result.broken) {
+        put(data, L"plate", result.plate);
+    }
+
     return data;
 }
 
@@ -62,6 +67,10 @@ Object play_json(const Play& play) {
     put(data, L"score", play.score);
     put(data, L"isBroken", play.broken);
     put(data, L"playedAt", play.played_at);
+    if (!play.plate.empty() && !play.broken) {
+        put(data, L"award", play.plate);
+    }
+
     return data;
 }
 

@@ -470,6 +470,7 @@ void Installer::apply(
         }
     };
     report(0, L"Checking your setup");
+    auto selected_hook = hook_.configured(selection.sync, selection.overlay);
     bool keep = selection.sync || selection.overlay;
     auto receipt = load_installation(paths_.app);
     bool existing = receipt.has_value();
@@ -507,7 +508,7 @@ void Installer::apply(
     bool moving = keep && !old_root.empty() && !same_folder(old_root, root);
     HookStatus destination;
     if (keep) {
-        destination = hook_.preflight(root, installed_fingerprint);
+        destination = selected_hook.preflight(root, installed_fingerprint);
     }
 
     auto old_layer = GameHook::layer(old_root);
@@ -519,7 +520,7 @@ void Installer::apply(
     bool remove_old = !old_root.empty() && (!keep || moving || changing_file);
     std::map<fs::path, HookStatus> old_hooks;
     auto remember_old = [&](const fs::path& path) {
-        auto status = hook_.inspect(path, installed_fingerprint);
+        auto status = selected_hook.inspect(path, installed_fingerprint);
         if (status.state == HookState::Conflict) {
             throw Error("The installed game export layer was modified. Restore it before removing or moving "
                         "this installation.");
@@ -553,9 +554,9 @@ void Installer::apply(
     }
 
     bool old_changed = std::any_of(old_hooks.begin(), old_hooks.end(), [&](const auto& entry) {
-        return hook_.inspect(entry.first, installed_fingerprint) != entry.second;
+        return selected_hook.inspect(entry.first, installed_fingerprint) != entry.second;
     });
-    if ((keep && hook_.preflight(root, installed_fingerprint) != destination) || old_changed) {
+    if ((keep && selected_hook.preflight(root, installed_fingerprint) != destination) || old_changed) {
         throw Error("The game export layer changed during setup. Run setup again.");
     }
 
@@ -585,7 +586,7 @@ void Installer::apply(
         if (keep) {
             transaction.expect_hook(GameHook::layer(root), destination.fingerprint);
             if (replace_hook) {
-                transaction.write(GameHook::layer(root), hook_.source());
+                transaction.write(GameHook::layer(root), selected_hook.source());
             }
 
             if (replace_hook || moving) {
@@ -597,7 +598,6 @@ void Installer::apply(
                 }
             }
 
-            transaction.directory(GameHook::exports(root));
             report(45, L"Saving your component choices");
             auto next = config;
             next.game_root = root;
@@ -633,7 +633,7 @@ void Installer::apply(
             put(marker, L"schema", 1);
             put(marker, L"version", PIU_VERSION);
             put(marker, L"gameRoot", utf8(root.wstring()));
-            put(marker, L"hookSha256", hook_.fingerprint());
+            put(marker, L"hookSha256", selected_hook.fingerprint());
             put(marker, L"hookFile", utf8(GameHook::LayerName));
             put(marker, L"sync", next.sync);
             put(marker, L"overlay", next.overlay);
@@ -667,6 +667,10 @@ void Installer::apply(
 
     if (remove_old && (!keep || moving)) {
         remove_empty(GameHook::exports(old_root));
+    }
+
+    if (keep) {
+        remove_empty(GameHook::exports(root));
     }
 
     if (!keep) {

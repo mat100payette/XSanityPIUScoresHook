@@ -19,6 +19,7 @@ public:
         : source_(std::move(source)), fingerprint_(fingerprint(source_)) {
     }
 
+    GameHook configured(bool sync, bool overlay) const;
     static fs::path validate(const fs::path& root);
     static constexpr wchar_t LayerName[] = L"ScreenSystemLayer overlay.lua";
     static fs::path layer(const fs::path& root);

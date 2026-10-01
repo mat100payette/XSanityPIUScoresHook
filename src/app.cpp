@@ -235,7 +235,7 @@ void check_game_connection(const Preferences& config) {
         throw Error("Run the companion installer to choose your components and XSanity folder.");
     }
 
-    GameHook hook;
+    auto hook = GameHook{}.configured(config.sync, config.overlay);
     if (hook.preflight(config.game_root).state != HookState::Current) {
         throw Error("The game connection needs updating. Reopen setup and apply your installed components.");
     }

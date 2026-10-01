@@ -1,11 +1,14 @@
 #pragma once
 #include "api.h"
+#include "mailbox.h"
 #include <condition_variable>
 
 namespace piu {
 class Engine {
     fs::path folder_;
     Api& api_;
+    MailboxReader mailbox_;
+    ExportFeed feed_;
     mutable std::mutex gate_;
     std::mutex sync_gate_;
     Preferences config_;
@@ -17,6 +20,7 @@ class Engine {
     GameChart current_;
     bool playing_ = false;
     uint64_t heartbeat_ = 0;
+    std::string export_error_;
     unsigned generation_ = 0;
     std::atomic<bool> stopping_{false};
     std::atomic<bool> sync_due_{true};
@@ -30,7 +34,8 @@ class Engine {
     void sync_loop();
 
 public:
-    Engine(fs::path folder, Api& api) : folder_(std::move(folder)), api_(api) {
+    Engine(fs::path folder, Api& api, ExportFeed feed = {})
+        : folder_(std::move(folder)), api_(api), feed_(std::move(feed)) {
     }
 
     ~Engine() {
@@ -41,7 +46,7 @@ public:
     Preferences config() const;
     Store store() const;
     std::string token() const;
-    std::string status() const;
+    std::string status(uint64_t clock = now()) const;
     void configure(const std::string& token, const std::string& mix);
     void capture(const Result& result, uint64_t written);
     void poll();

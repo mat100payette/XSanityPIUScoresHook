@@ -1,6 +1,7 @@
 #include "engine.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace piu {
 namespace {
@@ -50,8 +51,18 @@ std::string Engine::token() const {
     return token_;
 }
 
-std::string Engine::status() const {
+std::string Engine::status(uint64_t clock) const {
     std::lock_guard lock(gate_);
+    if (!token_.empty() && (config_.sync || config_.overlay)) {
+        if (heartbeat_ == 0 || clock < heartbeat_ || clock - heartbeat_ > 150000000) {
+            return "Waiting for XSanity exports. " + status_;
+        }
+
+        if (!export_error_.empty()) {
+            return "XSanity exporter: " + export_error_;
+        }
+    }
+
     return status_;
 }
 
@@ -124,27 +135,37 @@ void Engine::poll() {
         return;
     }
 
-    auto exports = config.game_root / L"Save" / L"PiuCompanion";
-    auto current = exports / L"current.json";
-    if (config.overlay && fs::exists(current)) {
-        auto time = modified(current);
-        auto data = parse(read(current, 65536));
-        auto chart = game_chart(data);
-        bool playing = flag(data, L"playing");
-        std::lock_guard lock(gate_);
-        if (config.game_root == config_.game_root && time == modified(current)) {
-            current_ = std::move(chart);
-            playing_ = playing;
-            heartbeat_ = time;
-        }
+    auto frame = feed_ ? feed_(config.game_root) : mailbox_.poll(config.game_root);
+    if (!frame) {
+        return;
     }
 
-    auto result = exports / L"result.json";
-    if (config.sync && fs::exists(result)) {
-        auto time = modified(result);
-        auto data = result_from_json(parse(read(result, 65536)));
-        if (time == modified(result) && config.game_root == this->config().game_root) {
-            capture(data, time);
+    auto packet = parse(frame->payload);
+    auto current = packet.GetNamedObject(L"current");
+    {
+        std::lock_guard lock(gate_);
+        if (config.game_root != config_.game_root) {
+            return;
+        }
+
+        current_ = config.overlay ? game_chart(current) : GameChart{};
+        export_error_ = str(current, L"error");
+        if (flag(current, L"initializing")) {
+            export_error_ = "Hook loaded; waiting for initialization.";
+        }
+
+        playing_ = config.overlay && flag(current, L"playing") && export_error_.empty();
+        heartbeat_ = frame->observed;
+    }
+
+    if (config.sync && packet.HasKey(L"result")) {
+        auto completed = packet.GetNamedNumber(L"completed");
+        auto age = frame->clock - completed;
+        if (std::isfinite(age) && completed >= 0 && age >= 0 && age <= 60) {
+            auto elapsed = static_cast<uint64_t>(age * 10000000);
+            if (elapsed <= frame->observed) {
+                capture(result_from_json(packet.GetNamedObject(L"result")), frame->observed - elapsed);
+            }
         }
     }
 }
@@ -253,7 +274,7 @@ void Engine::sync() {
             }
 
             event = item.result.id;
-            play = {id, item.result.score, item.result.broken, item.played_at};
+            play = {id, item.result.score, item.result.broken, item.played_at, item.result.plate};
         }
 
         auto failure = upload_play(api_, token, mix, play);
@@ -308,7 +329,7 @@ void Engine::poll_loop() {
         try {
             poll();
         } catch (...) {
-            // Partial game writes are retried on the next tick.
+            // Incomplete mailbox snapshots are retried on the next tick.
         }
 
         std::unique_lock lock(wake_gate_);

@@ -5,7 +5,7 @@
 
 Automatically upload your XSanity personal bests to [PIU Scores](https://piuscores.arroweclip.se). Add an optional OBS overlay showing **song · difficulty · website PB**.
 
-**Requires:** Windows 10/11 (x64) and XSanity with the **xsanity** theme.
+**Requires:** Windows 10/11 (x64) and XSanity with the **xsanity** theme. Keep the companion running while playing; no game logging settings are needed.
 
 ## Get started
 
@@ -15,7 +15,7 @@ Automatically upload your XSanity personal bests to [PIU Scores](https://piuscor
 4. Enter your personal PIU Scores API token and select **Phoenix** or **Phoenix 2** to match your scores.
 5. Open **Play XSanity** from the Start menu to launch the game and companion together.
 
-The tray icon gives you **Account settings**, **Check for updates**, **Manage installation**, and **Exit**. Closing the game leaves the companion running.
+The tray icon gives you **Account settings**, **Check for updates**, **Manage installation**, and **Exit**. Closing the game leaves the companion running. Run both normally as the same Windows user; do not launch the game as administrator.
 
 ## Set up the OBS overlay
 
@@ -49,7 +49,8 @@ If your version has no **Check for updates** menu item, download and run the [la
 ## What gets synced?
 
 - **Supported play:** normal single-player Single/Double charts with Phoenix scoring.
-- **Skipped play:** autoplay, changed music rates or judgement, disqualified results, custom or unmatched charts, training, missions, multiplayer, and courses.
+- **Skipped play:** autoplay, slow/fast Rush, altered judgement or note counts, disqualified results, custom or unmatched charts, training, missions, multiplayer, and courses. Normal scroll speed and visual settings are allowed.
+- **Plates:** included with new PBs, using the completed result’s judgements. Failed stages have no plate.
 - **Personal bests:** compared against PIU Scores. A cleared stage beats a stage break; otherwise, the higher score wins. Existing game score history is not imported.
 - **Offline play:** results wait for the connection to return. If the companion reports an unresolved upload, check it on PIU Scores.
 - **Account changes:** finish pending uploads before switching accounts or mixes.
@@ -58,4 +59,4 @@ If your version has no **Check for updates** menu item, download and run the [la
 
 See [Contributing](CONTRIBUTING.md) for building, formatting, and publishing releases, or [Security](SECURITY.md) for account and data handling.
 
-Automated checks use simulated game folders and accounts. Live gameplay capture and authenticated uploads still need a real-session check.
+Checks cover simulated accounts, installer maintenance, and the Lua bridge across real processes. Gameplay capture and an authenticated PB upload have also been verified in XSanity with logging disabled.

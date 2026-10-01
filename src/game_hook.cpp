@@ -37,6 +37,25 @@ std::string GameHook::fingerprint(std::string_view source) {
     return sha256(canonical);
 }
 
+GameHook GameHook::configured(bool sync, bool overlay) const {
+    auto source = source_;
+    for (auto [name, enabled] : {std::pair{"capture_results", sync}, std::pair{"publish_chart", overlay}}) {
+        for (auto value : {"true", "false"}) {
+            auto marker = "local " + std::string(name) + " = " + value + " -- configured by setup";
+            auto offset = source.find(marker);
+            if (offset != std::string::npos) {
+                source.replace(offset,
+                    marker.size(),
+                    "local " + std::string(name) + " = " + (enabled ? "true" : "false") +
+                        " -- configured by setup");
+                break;
+            }
+        }
+    }
+
+    return GameHook(std::move(source));
+}
+
 fs::path GameHook::validate(const fs::path& root) {
     if (root.empty() || root.wstring().find(L'"') != std::wstring::npos) {
         throw Error("Choose your XSanity folder.");

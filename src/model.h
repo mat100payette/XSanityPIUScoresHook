@@ -38,6 +38,7 @@ struct Result {
     int score = 0;
     bool broken = false;
     bool eligible = false;
+    std::string plate;
 };
 
 struct Pending {
@@ -57,6 +58,7 @@ struct Play {
     int score = 0;
     bool broken = false;
     std::string played_at;
+    std::string plate;
 };
 
 Preferences load_preferences(const fs::path& folder);
