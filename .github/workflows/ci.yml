@@ -18,6 +18,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Check release scripts
+        shell: pwsh
+        run: .\scripts\test-release.ps1
       - name: Build and check
         shell: pwsh
         run: .\scripts\build.ps1 -Test -Package

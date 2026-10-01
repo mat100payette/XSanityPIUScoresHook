@@ -14,21 +14,26 @@ on:
           - major
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish release
+  build:
+    name: Build and check release
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve version
         id: version
@@ -37,13 +42,45 @@ jobs:
           VERSION_BUMP: ${{ inputs.bump }}
         run: .\scripts\prepare-release.ps1 -Bump "$env:VERSION_BUMP"
 
+      - name: Check release scripts
+        shell: pwsh
+        run: .\scripts\test-release.ps1
+
       - name: Build and check
         shell: pwsh
-        run: .\scripts\build.ps1 -Test -Package
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: .\scripts\build.ps1 -Version "$env:RELEASE_VERSION" -Test -Package
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-package
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-package
+          path: artifacts
 
       - name: Publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: .\scripts\publish-release.ps1 -Tag "$env:RELEASE_TAG" -Branch "$env:GITHUB_REF_NAME"
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: .\scripts\publish-release.ps1 -Tag "$env:RELEASE_TAG" -Commit "$env:RELEASE_COMMIT"

@@ -18,7 +18,7 @@ Open [XSanityPIUScoresHook.code-workspace](XSanityPIUScoresHook.code-workspace) 
 - `artifacts/` contains the versioned installer and its SHA-256 checksum.
 - Omit `-Test -Package` for a build alone; use `-Configuration Debug` for `dist/Debug`.
 
-`VERSION` supplies executable and package versions. Generated outputs stay outside Git; CI runs the same checks.
+`VERSION` is the fallback for local and CI builds. Release builds pass `-Version X.Y.Z` to set executable metadata, updater comparisons, and package filenames without editing tracked files. To reproduce a release, check out its tag and pass its version explicitly. Generated outputs stay outside Git; CI runs the same checks.
 
 C++ uses `.clang-format` and Lua uses `.stylua.toml`: four spaces, expanded control flow, and a 110-column limit. Leave one blank line after a completed control-flow block before the next statement; the formatters preserve this spacing but do not insert it automatically. Both languages format on save with the recommended VS Code C/C++ and StyLua extensions.
 
@@ -46,13 +46,15 @@ The [PIU Scores API documentation](https://piuscores.arroweclip.se/swagger/index
 
 ## Release
 
-1. Commit and push the changes you want to release.
+1. Merge the changes you want to release into **main** through a pull request.
 2. On GitHub, open **Actions → Release → Run workflow**.
 3. Choose **main** and a version bump: **patch**, **minor**, or **major**.
 4. Click **Run workflow**. When it succeeds, the published release link appears in the run summary.
 
-The workflow bumps the latest `vX.Y.Z` tag, updates `VERSION`, builds and checks the installer, pushes the version commit and tag, and publishes the installer and SHA-256 checksum. The first release uses `VERSION` as-is. No manual version edit or publishing step is needed.
+The workflow calculates the next version from the latest `vX.Y.Z` tag and passes it into the build. The first release uses `VERSION` as-is. It tags the exact main commit that passed the build and publishes the installer and SHA-256 checksum. It never commits or pushes to main, so required pull requests remain enforced; no bypass or personal token is needed. Only the publish job has repository write permission.
 
-Release logic lives in `scripts/prepare-release.ps1` (version commit and tag) and `scripts/publish-release.ps1` (push and publication); the workflow calls these around `scripts/build.ps1`.
+Release logic lives in `scripts/prepare-release.ps1` (version and commit selection) and `scripts/publish-release.ps1` (tag and publication). Run `scripts/test-release.ps1` for isolated release checks with a local Git remote and fake GitHub responses.
+
+If publishing fails after the build, use **Re-run failed jobs** to reuse the tested package. An existing tag must point to the same commit; draft uploads can be retried, and published releases are never overwritten. Rerunning the entire workflow at the same tagged commit keeps that version instead of creating another release.
 
 Check the installer, component combinations, and a live gameplay/upload session before distributing a tested release. Sign the executables and installer when a certificate is available; regenerate its checksum after signing.

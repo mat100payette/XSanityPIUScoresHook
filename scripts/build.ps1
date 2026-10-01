@@ -2,6 +2,7 @@
 param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
+    [string]$Version,
     [switch]$Test,
     [switch]$Package
 )
@@ -10,10 +11,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ($repoRoot -match '["&|<>%^!\r\n]') { throw 'Build from a path without shell metacharacters.' }
 if ($Package -and $Configuration -ne 'Release') { throw 'Packages require Release.' }
-$version = (Get-Content -LiteralPath (Join-Path $repoRoot 'VERSION') -Raw).Trim()
+if (-not $Version) {
+    $Version = (Get-Content -LiteralPath (Join-Path $repoRoot 'VERSION') -Raw).Trim()
+}
 if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or
     @($version.Split('.') | Where-Object { [long]$_ -gt 65534 }).Count) {
-    throw 'VERSION must be a three-part numeric version (each part 0-65534).'
+    throw 'Version must have three numeric parts, each 0-65534.'
 }
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio Build Tools with Desktop development with C++.' }
