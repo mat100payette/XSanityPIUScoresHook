@@ -37,6 +37,7 @@ public:
 struct InstallationReceipt {
     InstallSelection selection;
     std::string hook_fingerprint;
+    std::wstring hook_file;
     std::string bytes;
 };
 
@@ -69,7 +70,14 @@ std::optional<InstallationReceipt> load_installation(const fs::path& folder) {
             throw Error("Invalid exporter fingerprint.");
         }
 
-        return InstallationReceipt{{root, sync, overlay}, std::move(fingerprint), std::move(bytes)};
+        // Receipts written before the load-point fix refer to the auxiliary actor.
+        auto hook_file = wide(str(marker, L"hookFile", "ScreenSystemLayer aux.lua"));
+        if (hook_file != GameHook::LayerName && hook_file != L"ScreenSystemLayer aux.lua") {
+            throw Error("Invalid exporter filename.");
+        }
+
+        return InstallationReceipt{
+            {root, sync, overlay}, std::move(fingerprint), std::move(hook_file), std::move(bytes)};
     } catch (const Error&) {
         throw Error("The installation receipt is damaged or unsupported. Setup has not changed any files.");
     } catch (const winrt::hresult_error&) {
@@ -502,15 +510,33 @@ void Installer::apply(
         destination = hook_.preflight(root, installed_fingerprint);
     }
 
-    bool remove_old = !old_root.empty() && (!keep || moving);
-    HookStatus old_hook;
-    if (remove_old) {
-        safe_path(GameHook::exports(old_root));
-        old_hook = hook_.inspect(GameHook::layer(old_root), installed_fingerprint);
-        if (old_hook.state == HookState::Conflict) {
+    auto old_layer = GameHook::layer(old_root);
+    if (receipt) {
+        old_layer.replace_filename(receipt->hook_file);
+    }
+
+    bool changing_file = receipt && receipt->hook_file != GameHook::LayerName;
+    bool remove_old = !old_root.empty() && (!keep || moving || changing_file);
+    std::map<fs::path, HookStatus> old_hooks;
+    auto remember_old = [&](const fs::path& path) {
+        auto status = hook_.inspect(path, installed_fingerprint);
+        if (status.state == HookState::Conflict) {
             throw Error("The installed game export layer was modified. Restore it before removing or moving "
                         "this installation.");
         }
+
+        old_hooks.emplace(path, std::move(status));
+    };
+    if (remove_old) {
+        safe_path(GameHook::exports(old_root));
+        remember_old(old_layer);
+    }
+
+    if (changing_file && moving) {
+        // A moved or copied game may carry the receipt-owned actor at its former filename.
+        auto moved_layer = GameHook::layer(root);
+        moved_layer.replace_filename(receipt->hook_file);
+        remember_old(moved_layer);
     }
 
     bool replace_hook = keep && destination.state != HookState::Current;
@@ -526,8 +552,10 @@ void Installer::apply(
         config = load_preferences(paths_.state);
     }
 
-    if ((keep && hook_.preflight(root, installed_fingerprint) != destination) ||
-        (remove_old && hook_.inspect(GameHook::layer(old_root), installed_fingerprint) != old_hook)) {
+    bool old_changed = std::any_of(old_hooks.begin(), old_hooks.end(), [&](const auto& entry) {
+        return hook_.inspect(entry.first, installed_fingerprint) != entry.second;
+    });
+    if ((keep && hook_.preflight(root, installed_fingerprint) != destination) || old_changed) {
         throw Error("The game export layer changed during setup. Run setup again.");
     }
 
@@ -540,9 +568,12 @@ void Installer::apply(
         transaction.expect_file(paths_.app / L"installation.json",
             receipt ? std::optional<std::string>(receipt->bytes) : std::nullopt);
         report(30, keep ? L"Connecting XSanity" : L"Removing the game connection");
+        for (const auto& [path, status] : old_hooks) {
+            transaction.expect_hook(path, status.fingerprint);
+            transaction.remove(path);
+        }
+
         if (remove_old) {
-            transaction.expect_hook(GameHook::layer(old_root), old_hook.fingerprint);
-            transaction.remove(GameHook::layer(old_root));
             for (auto file : {L"current.json", L"result.json"}) {
                 auto path = GameHook::exports(old_root) / file;
                 if (fs::exists(path)) {
@@ -603,6 +634,7 @@ void Installer::apply(
             put(marker, L"version", PIU_VERSION);
             put(marker, L"gameRoot", utf8(root.wstring()));
             put(marker, L"hookSha256", hook_.fingerprint());
+            put(marker, L"hookFile", utf8(GameHook::LayerName));
             put(marker, L"sync", next.sync);
             put(marker, L"overlay", next.overlay);
             transaction.write(paths_.app / L"installation.json", encode(marker));
@@ -633,7 +665,7 @@ void Installer::apply(
         std::rethrow_exception(error);
     }
 
-    if (remove_old) {
+    if (remove_old && (!keep || moving)) {
         remove_empty(GameHook::exports(old_root));
     }
 
@@ -646,84 +678,4 @@ void Installer::apply(
     report(100, keep ? L"Setup complete" : L"Removal complete");
 }
 
-fs::path maintenance_directory() {
-    GUID guid{};
-    winrt::check_hresult(CoCreateGuid(&guid));
-    wchar_t text[40];
-    StringFromGUID2(guid, text, 40);
-    return fs::temp_directory_path() / (L"PiuCompanionSetup-" + std::wstring(text));
-}
-
-bool is_maintenance_directory(const fs::path& directory) {
-    auto path = fs::absolute(directory).lexically_normal(),
-         temp = fs::absolute(fs::temp_directory_path()).lexically_normal();
-    auto drive = path.root_name().wstring();
-    if (drive.size() != 2 || drive[1] != L':') {
-        return false;
-    }
-
-    if (!fs::equivalent(path.parent_path(), temp)) {
-        return false;
-    }
-
-    auto name = path.filename().wstring();
-    constexpr std::wstring_view prefix = L"PiuCompanionSetup-";
-    if (!name.starts_with(prefix) || name.size() != prefix.size() + 38) {
-        return false;
-    }
-
-    GUID guid{};
-    return SUCCEEDED(CLSIDFromString(name.c_str() + prefix.size(), &guid));
-}
-
-void clean_maintenance_after_exit(const fs::path& directory) {
-    if (!is_maintenance_directory(directory)) {
-        throw Error("Invalid maintenance cleanup location.");
-    }
-
-    safe_path(directory);
-    safe_path(directory / L"maintenance.exe");
-    safe_path(directory / L"cleanup.cmd");
-    wchar_t system[MAX_PATH];
-    UINT count = GetSystemDirectoryW(system, MAX_PATH);
-    if (!count || count >= MAX_PATH) {
-        fail("Find Windows cleanup tools");
-    }
-
-    fs::path system_path(system);
-    auto delay = utf8((system_path / L"ping.exe").wstring());
-    if (delay.find_first_of("\"%\r\n") != std::string::npos) {
-        throw Error("Unexpected Windows system path.");
-    }
-
-    // Only fixed filenames in a validated, private temporary directory reach the shell.
-    // No user paths are inserted into deletion commands; rmdir never removes other files.
-    std::string script = "@echo off\r\nfor /l %%N in (1,1,30) do (\r\n del /q maintenance.exe >nul 2>nul\r\n "
-                         "if not exist maintenance.exe goto finish\r\n \"" +
-                         delay +
-                         "\" -n 2 127.0.0.1 >nul 2>nul\r\n)\r\nexit /b 1\r\n:finish\r\n(\r\n del /q "
-                         "cleanup.cmd >nul 2>nul\r\n cd ..\r\n rmdir \"" +
-                         utf8(directory.filename().wstring()) + "\" >nul 2>nul\r\n)\r\n";
-    atomic_write(directory / L"cleanup.cmd", script);
-    auto shell = system_path / L"cmd.exe";
-    std::wstring command = L"\"" + shell.wstring() + L"\" /d /q /v:off /c cleanup.cmd";
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(shell.c_str(),
-            command.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            CREATE_NO_WINDOW,
-            nullptr,
-            directory.c_str(),
-            &startup,
-            &process)) {
-        fail("Start installer cleanup");
-    }
-
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-}
 } // namespace piu

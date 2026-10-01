@@ -10,6 +10,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Test -P
 
 Install Visual Studio Build Tools with **Desktop development with C++**, the MSVC x64 tools, and Windows SDK. The build uses C++20. Warnings fail the build. Follow `.editorconfig`; behavioral checks in `tests/checks.cpp` use disposable game folders, a fake API, and fake installation registration. Installer checks cover native accessibility, mouse/keyboard input, display scaling, scrolling, and themed screen previews.
 
+Lua exporter checks run as part of the test build using a local Lua 5.1.5 interpreter, built from the checksum-verified official source and cached under build/tools. The first test build needs internet access; the interpreter is only a development tool and is not packaged. The tests exercise actor initialization, current-chart heartbeats, result capture, eligibility, duplicate prevention, and write failures.
+
 Open [XSanityPIUScoresHook.code-workspace](XSanityPIUScoresHook.code-workspace) in VS Code for editor settings and the **Build**, **Check**, and **Package** tasks.
 
 - `dist/` contains the app and maintenance installer.
@@ -24,7 +26,9 @@ Run `.\scripts\format.ps1` to format both languages, or add `-Check` to check th
 
 The engine's mutex protects state shared by export polling, syncing, and the UI. Keep network requests outside that lock. Settings and pending-upload fields are persisted; preserve compatibility when changing them. Installer tests must never use real game folders, account tokens, Start menu shortcuts, or uninstall registration.
 
-Exporter ownership and version matching are separate. `installation.json` records the installed exporter SHA-256 and game folder; normalize only CRLF/LF when hashing. Setup can replace an unchanged recorded exporter with the current bundled copy, even across skipped releases. When the user selects a moved or copied game folder, accept only an exporter matching that receipt or the bundled source, validate both locations again before writing, and commit the new folder with the fingerprint. Relocation clears stale exports and advances the capture cutoff even when the hook is already current. Test upgrades with synthetic exporters; do not keep historical hook copies or per-release fingerprints. Update the hook, capture cutoff, transient exports, and installation receipt in the same rollback transaction. Preserve pending uploads and account settings. The companion requires its bundled exporter at startup.
+Exporter ownership and version matching are separate. `installation.json` records the installed exporter SHA-256, filename, and game folder; normalize only CRLF/LF when hashing. Setup can replace an unchanged recorded exporter with the current bundled copy, even across skipped releases. When the user selects a moved or copied game folder, accept only an exporter matching that receipt or the bundled source, validate both locations again before writing, and commit the new folder with the fingerprint. Relocation clears stale exports and advances the capture cutoff even when the hook is already current. Test upgrades with synthetic exporters; do not keep historical hook copies or per-release fingerprints. Update the hook, capture cutoff, transient exports, and installation receipt in the same rollback transaction. Preserve pending uploads and account settings. The companion requires its bundled exporter at startup.
+
+The in-app updater requires public GitHub releases; it never requests a GitHub token or uses the PIU Scores token. Updates reuse the installer rather than maintaining a second installation path. Keep release parsing and integrity checks in update.cpp, cancellable GitHub transport in update_http.cpp, and the native dialog in update_ui.cpp. Tests use fake releases and launch callbacks; they must not run a downloaded installer. The optional build/Release/Checks.exe --update-network check downloads and verifies the public release, then deletes its temporary copy without executing it.
 
 The overlay contains only current song, difficulty, and website PB. PIU Scores owns PBs; XSanity provides transient exports. Keep overlay-only mode read-only and syncing-only mode free of a local listener. Setup must preserve existing game files and refuse conflicting theme layers.
 
@@ -36,7 +40,7 @@ Describe what changed, why, and how it was tested in pull requests. Call out liv
 | --- | --- |
 | `%LOCALAPPDATA%/Programs/XSanityPIUScoresHook/` | App, maintenance setup, and installation receipt |
 | `%LOCALAPPDATA%/XSanityPIUScoresHook/` | Account settings and pending uploads |
-| `<XSanity>/Themes/xsanity/BGAnimations/ScreenSystemLayer aux.lua` | Game exporter |
+| `<XSanity>/Themes/xsanity/BGAnimations/ScreenSystemLayer overlay.lua` | Game exporter |
 | `<XSanity>/Save/PiuCompanion/` | Transient game exports |
 
 The [PIU Scores API documentation](https://piuscores.arroweclip.se/swagger/index.html) describes the score contract.

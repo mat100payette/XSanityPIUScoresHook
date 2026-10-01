@@ -1,4 +1,5 @@
 #include "setup_view.h"
+#include "preview.h"
 #include <oleacc.h>
 #include <algorithm>
 #include "engine.h"
@@ -10,6 +11,9 @@
 #include <chrono>
 
 using namespace piu;
+
+int update_checks();
+int update_network_check();
 
 namespace {
 int passed = 0;
@@ -55,6 +59,9 @@ struct Fixture {
         auto path = root / name;
         atomic_write(path / L"Program64" / L"XSanity.exe", "fake game");
         fs::create_directories(path / L"Themes" / L"xsanity" / L"BGAnimations");
+        atomic_write(
+            path / L"Themes" / L"_fallback" / L"BGAnimations" / L"ScreenSystemLayer overlay" / L"default.lua",
+            "return Def.ActorFrame {} -- built-in overlay");
         return path;
     }
 };
@@ -629,7 +636,7 @@ void installer_checks() {
     check(defaults.mix == "Phoenix2" && defaults.sync && !defaults.overlay,
         "missing optional settings use component defaults");
     auto duplicate_layer = fixture.game(L"duplicate");
-    fs::create_directory(GameHook::layer(duplicate_layer).parent_path() / L"ScreenSystemLayer aux");
+    fs::create_directory(GameHook::layer(duplicate_layer).parent_path() / L"ScreenSystemLayer overlay");
     rejects(
         [&] {
             hook.preflight(duplicate_layer);
@@ -789,6 +796,91 @@ void hook_receipt_checks() {
               read(recovery.paths.state / L"uploads.json") == recovery_queue &&
               !fs::exists(GameHook::exports(recovery.game) / L"result.json"),
         "valid receipt repairs a missing exporter without losing pending uploads");
+}
+
+void hook_entrypoint_checks() {
+    const GameHook first("return Def.ActorFrame {} -- synthetic installed exporter\n");
+    const GameHook latest;
+    for (int location : {0, 1, 2}) {
+        HookUpgradeFixture fixture(("hook-entrypoint-" + std::to_string(location)).c_str());
+        fixture.installer(first).apply({fixture.game, true, false});
+        fixture.seed();
+        fs::remove(GameHook::exports(fixture.game) / L"keep.txt");
+        auto old_root = fixture.game;
+        auto marker_path = fixture.paths.app / L"installation.json";
+        auto auxiliary = GameHook::layer(fixture.game).parent_path() / L"ScreenSystemLayer aux.lua";
+        fs::rename(GameHook::layer(fixture.game), auxiliary);
+        auto marker = parse(read(marker_path));
+        marker.Remove(L"hookFile");
+        atomic_write(marker_path, encode(marker));
+        if (location == 1) {
+            fixture.move_game();
+        } else if (location == 2) {
+            auto copied = fixture.files.root / L"copied game";
+            fs::copy(fixture.game, copied, fs::copy_options::recursive);
+            fixture.game = copied;
+        }
+
+        auxiliary = GameHook::layer(fixture.game).parent_path() / L"ScreenSystemLayer aux.lua";
+        auto fallback = fixture.game / L"Themes" / L"_fallback" / L"BGAnimations" /
+                        L"ScreenSystemLayer overlay" / L"default.lua";
+        auto builtin = read(fallback);
+        auto queue = read(fixture.paths.state / L"uploads.json");
+        auto token = load_preferences(fixture.paths.state).protected_token;
+        auto setup = fixture.installer(latest);
+
+        atomic_write(auxiliary, first.source() + "-- owner edit\n");
+        auto modified_files = snapshot_files(fixture.files.root);
+        rejects(
+            [&] {
+                setup.apply({fixture.game, true, false});
+            },
+            "entrypoint upgrade refuses a modified auxiliary actor, including moved and copied games");
+        check(snapshot_files(fixture.files.root) == modified_files,
+            "entrypoint conflict leaves every game and installation file untouched");
+        atomic_write(auxiliary, first.source());
+
+        auto before = snapshot_files(fixture.files.root);
+        fixture.host.fail_at = fixture.host.mutations + 2;
+        rejects(
+            [&] {
+                setup.apply({fixture.game, true, false});
+            },
+            "entrypoint upgrade rolls back if replacing its actor fails");
+        check(snapshot_files(fixture.files.root) == before,
+            "failed entrypoint upgrade restores the recorded actor and receipt");
+        fixture.host.fail_at = -1;
+
+        setup.apply({fixture.game, true, false});
+        auto updated = parse(read(marker_path));
+        check(fs::is_directory(GameHook::exports(fixture.game)),
+            "entrypoint upgrade retains the empty destination export directory");
+        check(latest.current(GameHook::layer(fixture.game)) && !fs::exists(auxiliary) &&
+                  !fs::exists(GameHook::layer(old_root).parent_path() / L"ScreenSystemLayer aux.lua") &&
+                  str(updated, L"hookFile") == utf8(GameHook::LayerName),
+            "entrypoint upgrade installs the loaded overlay and removes only receipt-owned auxiliary actors");
+        check(read(fallback) == builtin && read(fixture.paths.state / L"uploads.json") == queue &&
+                  load_preferences(fixture.paths.state).protected_token == token,
+            "entrypoint upgrade preserves the built-in overlay, account, and pending uploads");
+        setup.apply({fixture.game, false, false});
+        check(!fs::exists(GameHook::layer(fixture.game)) && read(fallback) == builtin,
+            "removing the companion restores the inherited system overlay without editing it");
+    }
+
+    HookUpgradeFixture invalid("hook-entrypoint-invalid");
+    invalid.installer(first).apply({invalid.game, true, false});
+    auto marker_path = invalid.paths.app / L"installation.json";
+    auto marker = parse(read(marker_path));
+    put(marker, L"hookFile", "../unrelated.lua");
+    atomic_write(marker_path, encode(marker));
+    auto before = snapshot_files(invalid.files.root);
+    rejects(
+        [&] {
+            invalid.installer(latest).apply({invalid.game, true, false});
+        },
+        "receipt filenames cannot redirect setup to an unrelated file");
+    check(snapshot_files(invalid.files.root) == before,
+        "invalid receipt filename is rejected before any mutation");
 }
 
 void hook_race_checks() {
@@ -1192,6 +1284,7 @@ void hook_upgrade_checks() {
     check(!fs::exists(GameHook::layer(removal.game)) && !fs::exists(removal.paths.app / L"installation.json"),
         "latest setup removes an unchanged older managed exporter through its receipt");
 
+    hook_entrypoint_checks();
     hook_receipt_checks();
     hook_race_checks();
     hook_relocation_checks();
@@ -1346,76 +1439,7 @@ struct Preview {
     }
 
     void save(const fs::path& path, bool client_only = false) {
-        RECT rect{};
-        if (client_only) {
-            GetClientRect(window, &rect);
-        } else {
-            GetWindowRect(window, &rect);
-        }
-
-        int width = rect.right - rect.left, height = rect.bottom - rect.top;
-        HDC screen = client_only ? GetDC(window) : GetWindowDC(window);
-        HDC memory = CreateCompatibleDC(screen);
-        BITMAPINFO info{};
-        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        info.bmiHeader.biWidth = width;
-        info.bmiHeader.biHeight = -height;
-        info.bmiHeader.biPlanes = 1;
-        info.bmiHeader.biBitCount = 32;
-        info.bmiHeader.biCompression = BI_RGB;
-        void* pixels = nullptr;
-        HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
-        auto old = SelectObject(memory, bitmap);
-        if (client_only) {
-            // Paint the client and children directly; WM_PRINT's legacy frame is not the DWM frame.
-            SendMessageW(
-                window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(memory), PRF_CLIENT | PRF_ERASEBKGND);
-            for (HWND child = GetWindow(window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
-                if (!(GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE)) {
-                    continue;
-                }
-
-                RECT bounds{};
-                GetWindowRect(child, &bounds);
-                MapWindowPoints(nullptr, window, reinterpret_cast<POINT*>(&bounds), 2);
-                int saved = SaveDC(memory);
-                SetWindowOrgEx(memory, -bounds.left, -bounds.top, nullptr);
-                IntersectClipRect(memory, 0, 0, bounds.right - bounds.left, bounds.bottom - bounds.top);
-                SendMessageW(
-                    child, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(memory), PRF_CLIENT | PRF_ERASEBKGND);
-                RestoreDC(memory, saved);
-            }
-        } else {
-            SendMessageW(window,
-                WM_PRINT,
-                reinterpret_cast<WPARAM>(memory),
-                PRF_NONCLIENT | PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
-        }
-
-        auto factory =
-            winrt::create_instance<IWICImagingFactory>(CLSID_WICImagingFactory, CLSCTX_INPROC_SERVER);
-        winrt::com_ptr<IWICBitmap> image;
-        winrt::check_hresult(
-            factory->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapIgnoreAlpha, image.put()));
-        winrt::com_ptr<IWICStream> stream;
-        winrt::check_hresult(factory->CreateStream(stream.put()));
-        winrt::check_hresult(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE));
-        winrt::com_ptr<IWICBitmapEncoder> encoder;
-        winrt::check_hresult(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.put()));
-        winrt::check_hresult(encoder->Initialize(stream.get(), WICBitmapEncoderNoCache));
-        winrt::com_ptr<IWICBitmapFrameEncode> frame;
-        winrt::check_hresult(encoder->CreateNewFrame(frame.put(), nullptr));
-        winrt::check_hresult(frame->Initialize(nullptr));
-        winrt::check_hresult(frame->SetSize(static_cast<UINT>(width), static_cast<UINT>(height)));
-        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGR;
-        winrt::check_hresult(frame->SetPixelFormat(&format));
-        winrt::check_hresult(frame->WriteSource(image.get(), nullptr));
-        winrt::check_hresult(frame->Commit());
-        winrt::check_hresult(encoder->Commit());
-        SelectObject(memory, old);
-        DeleteObject(bitmap);
-        DeleteDC(memory);
-        ReleaseDC(window, screen);
+        save_window_preview(window, path, client_only);
     }
 };
 
@@ -1974,9 +1998,19 @@ int wmain(int argc, wchar_t** argv) {
             return 0;
         }
 
+        if (argc == 2 && std::wstring_view(argv[1]) == L"--update-network") {
+            return update_network_check();
+        }
+
+        if (argc == 2 && std::wstring_view(argv[1]) == L"--updates") {
+            std::cout << update_checks() << " updater checks passed.\n";
+            return 0;
+        }
+
         icon_checks();
         engine_checks();
         api_checks();
+        passed += update_checks();
         installer_checks();
         installer_worker_checks();
         hook_upgrade_checks();

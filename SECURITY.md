@@ -9,3 +9,5 @@ Tokens use Windows encryption for the current user. `settings.json` and `uploads
 Security fixes target the latest source and release.
 
 Setup runs as the current user, writes only its known installation files, and refuses symbolic links, junctions, and conflicting game layers. Full removal deletes the saved token and queue; partial removal preserves account settings for the remaining component. Build outputs are unsigned unless the distributor signs them.
+
+Update checks are user-initiated and use a separate, unauthenticated GitHub connection. The updater accepts stable releases from this repository, checks exact asset names and sizes, verifies the published SHA-256 checksum, and restricts HTTPS redirects to GitHub release hosts. The checksum detects incomplete or changed downloads; it is not a publisher signature. Downloads stay in a private temporary directory outside XSanity. Cancelled downloads are removed; launched installers use the existing maintenance cleanup. The updater never edits the game or installs silently.

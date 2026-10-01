@@ -75,7 +75,7 @@ if ($formatLua) {
         $options += '--check', '--output-format=summary'
     }
 
-    & $StyLua @options (Join-Path $repoRoot 'hook')
+    & $StyLua @options (Join-Path $repoRoot 'hook') (Join-Path $repoRoot 'tests')
     if ($LASTEXITCODE -ne 0) {
         throw 'Lua formatting failed.'
     }

@@ -1,5 +1,6 @@
 #pragma once
 #include "game_hook.h"
+#include "maintenance.h"
 #include "model.h"
 
 namespace piu {
@@ -76,7 +77,4 @@ public:
         const InstallSelection& selection, const std::function<void(int, std::wstring_view)>& progress = {});
 };
 
-fs::path maintenance_directory();
-bool is_maintenance_directory(const fs::path& directory);
-void clean_maintenance_after_exit(const fs::path& directory);
 } // namespace piu

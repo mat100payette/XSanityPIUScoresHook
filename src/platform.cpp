@@ -6,6 +6,7 @@
 #include <tlhelp32.h>
 #include <cwctype>
 #include <limits>
+#include <array>
 
 namespace piu {
 std::wstring wide(std::string_view text) {
@@ -98,6 +99,38 @@ void atomic_write(const fs::path& path, std::string_view bytes) {
         fs::remove(temp, ignored);
         throw;
     }
+}
+
+std::string sha256(std::string_view bytes) {
+    if (bytes.size() > MAXDWORD) {
+        throw Error("SHA-256 input exceeds the size limit.");
+    }
+
+    std::array<BYTE, 32> hash{};
+    DWORD size = static_cast<DWORD>(hash.size());
+    if (!CryptHashCertificate2(L"SHA256",
+            0,
+            nullptr,
+            reinterpret_cast<const BYTE*>(bytes.data()),
+            static_cast<DWORD>(bytes.size()),
+            hash.data(),
+            &size)) {
+        fail("Compute SHA-256");
+    }
+
+    if (size != hash.size()) {
+        throw Error("Unexpected SHA-256 size.");
+    }
+
+    constexpr char Hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(hash.size() * 2);
+    for (BYTE byte : hash) {
+        result += Hex[byte >> 4];
+        result += Hex[byte & 15];
+    }
+
+    return result;
 }
 
 uint64_t modified(const fs::path& path) {

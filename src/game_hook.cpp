@@ -1,6 +1,4 @@
 #include "game_hook.h"
-#include <wincrypt.h>
-#include <array>
 
 namespace piu {
 
@@ -36,31 +34,7 @@ std::string GameHook::fingerprint(std::string_view source) {
         canonical += source[index];
     }
 
-    std::array<BYTE, 32> hash{};
-    DWORD size = static_cast<DWORD>(hash.size());
-    if (!CryptHashCertificate2(L"SHA256",
-            0,
-            nullptr,
-            reinterpret_cast<const BYTE*>(canonical.data()),
-            static_cast<DWORD>(canonical.size()),
-            hash.data(),
-            &size)) {
-        fail("Identify installed exporter");
-    }
-
-    if (size != hash.size()) {
-        throw Error("Unexpected exporter fingerprint size.");
-    }
-
-    constexpr char Hex[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(hash.size() * 2);
-    for (BYTE byte : hash) {
-        result += Hex[byte >> 4];
-        result += Hex[byte & 15];
-    }
-
-    return result;
+    return sha256(canonical);
 }
 
 fs::path GameHook::validate(const fs::path& root) {
@@ -75,11 +49,18 @@ fs::path GameHook::validate(const fs::path& root) {
         throw Error("The selected folder does not contain the xsanity theme.");
     }
 
+    auto fallback = path / L"Themes" / L"_fallback" / L"BGAnimations" / L"ScreenSystemLayer overlay";
+    if (!fs::is_regular_file(fallback / L"default.lua") &&
+        !fs::is_regular_file(fallback.wstring() + L".lua")) {
+        throw Error(
+            "XSanity's built-in system overlay is missing. Restore the game theme before installing.");
+    }
+
     return path;
 }
 
 fs::path GameHook::layer(const fs::path& root) {
-    return root / L"Themes" / L"xsanity" / L"BGAnimations" / L"ScreenSystemLayer aux.lua";
+    return root / L"Themes" / L"xsanity" / L"BGAnimations" / LayerName;
 }
 
 fs::path GameHook::exports(const fs::path& root) {
@@ -120,10 +101,11 @@ HookStatus GameHook::preflight(const fs::path& root, std::string_view installed_
     safe_path(exports(root));
     auto base = path.parent_path();
     auto status = inspect(path, installed_fingerprint);
-    if (fs::exists(base / L"ScreenSystemLayer aux") || fs::exists(base / L"ScreenSystemLayer aux.redir") ||
-        status.state == HookState::Conflict) {
-        throw Error("XSanity already has a different or modified ScreenSystemLayer aux. Setup will leave it "
-                    "untouched.");
+    if (fs::exists(base / L"ScreenSystemLayer overlay") ||
+        fs::exists(base / L"ScreenSystemLayer overlay.redir") || status.state == HookState::Conflict) {
+        throw Error(
+            "XSanity already has a different or modified ScreenSystemLayer overlay. Setup will leave it "
+            "untouched.");
     }
 
     return status;

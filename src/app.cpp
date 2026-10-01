@@ -2,6 +2,7 @@
 #include "game_hook.h"
 #include "overlay.h"
 #include "ui.h"
+#include "update.h"
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -11,11 +12,13 @@ constexpr UINT TrayMessage = WM_APP + 2;
 constexpr UINT Account = 1;
 constexpr UINT Manage = 2;
 constexpr UINT Exit = 3;
+constexpr UINT Updates = 4;
 
 struct App {
     Engine& engine;
     HWND window = nullptr;
     HWND account_dialog = nullptr;
+    HWND update_dialog = nullptr;
     HANDLE stop = nullptr;
     NOTIFYICONDATAW icon{};
     Icon large_icon;
@@ -141,6 +144,7 @@ struct App {
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, Account, L"Account settings...");
         AppendMenuW(menu, MF_STRING, Manage, L"Manage installation...");
+        AppendMenuW(menu, MF_STRING, Updates, L"Check for updates...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, Exit, L"Exit");
 
@@ -159,6 +163,14 @@ struct App {
         case Manage:
             try {
                 launch(executable().parent_path() / L"PiuCompanionSetup.exe");
+            } catch (...) {
+                show_error(window, exception_message());
+            }
+
+            break;
+        case Updates:
+            try {
+                show_updates(window, stop, update_dialog);
             } catch (...) {
                 show_error(window, exception_message());
             }
@@ -200,7 +212,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         return 0;
     case WM_TIMER:
         app->update_tip();
-        if (WaitForSingleObject(app->stop, 0) == WAIT_OBJECT_0) {
+        if (WaitForSingleObject(app->stop, 0) == WAIT_OBJECT_0 && !app->update_dialog) {
             if (app->account_dialog) {
                 EndDialog(app->account_dialog, IDCANCEL);
             }

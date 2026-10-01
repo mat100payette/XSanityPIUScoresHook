@@ -53,6 +53,7 @@ std::string utf8(std::wstring_view text);
 [[noreturn]] void fail(const char* operation);
 std::string read(const fs::path& path, size_t limit = 4 * 1024 * 1024);
 void atomic_write(const fs::path& path, std::string_view bytes);
+std::string sha256(std::string_view bytes);
 uint64_t modified(const fs::path& path);
 uint64_t now();
 std::string iso_time(uint64_t ticks);

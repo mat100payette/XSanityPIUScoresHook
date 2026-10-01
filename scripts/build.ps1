@@ -40,7 +40,7 @@ function Write-Resources([string]$name, [string]$description, [bool]$embedApp) {
     $resources = @"
 #include <windows.h>
 #include "$(ResourcePath (Join-Path $repoRoot 'src\dialogs.rc'))"
-101 RCDATA "$(ResourcePath (Join-Path $repoRoot 'hook\ScreenSystemLayer aux.lua'))"
+101 RCDATA "$(ResourcePath (Join-Path $repoRoot 'hook\ScreenSystemLayer overlay.lua'))"
 102 RCDATA "$(ResourcePath (Join-Path $repoRoot 'src\overlay.html'))"
 104 RCDATA "$(ResourcePath (Join-Path $repoRoot 'LICENSE'))"
 $icons
@@ -77,15 +77,16 @@ END
 }
 Write-Resources 'PiuCompanion' 'PIU Companion' $false
 Write-Resources 'PiuCompanionSetup' 'PIU Companion Setup' $true
+if ($Test) { & (Join-Path $PSScriptRoot 'test-hook.ps1') -VcVars $vcvars }
 $flags = '/nologo /std:c++20 /permissive- /W4 /WX /EHsc /Zc:__cplusplus /utf-8 /external:anglebrackets /external:W0 /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00'
 if ($Configuration -eq 'Release') { $flags += ' /MT /O2 /DNDEBUG /Gy /Gw' }
 else { $flags += ' /MTd /Od /Zi' }
 $includes = '/I' + (Quote (Join-Path $repoRoot 'src')) + ' /I' + (Quote (Join-Path $repoRoot 'installer')) + ' /I' + (Quote $buildRoot) + ' /Fd' + (Quote (Join-Path $buildRoot 'compiler.pdb'))
 $libs = 'user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib comctl32.lib crypt32.lib advapi32.lib winhttp.lib ws2_32.lib normaliz.lib runtimeobject.lib windowscodecs.lib dwmapi.lib oleacc.lib'
-$common = @('platform', 'model', 'api', 'engine', 'game_hook', 'overlay')
+$common = @('platform', 'model', 'api', 'engine', 'game_hook', 'overlay', 'maintenance', 'update', 'update_http', 'update_ui')
 $sourceArgs = ($common | ForEach-Object { Quote (Join-Path $repoRoot "src\$_.cpp") }) -join ' '
 $objArgs = ($common | ForEach-Object { Quote (Join-Path $objectRoot "$_.obj") }) -join ' '
-$installObjArgs = (@('platform', 'model', 'game_hook', 'install', 'setup_view') | ForEach-Object { Quote (Join-Path $objectRoot "$_.obj") }) -join ' '
+$installObjArgs = (@('platform', 'model', 'game_hook', 'maintenance', 'install', 'setup_view') | ForEach-Object { Quote (Join-Path $objectRoot "$_.obj") }) -join ' '
 $compile = "cl.exe $flags $includes"
 $link = '/link /INCREMENTAL:NO /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /OPT:REF /OPT:ICF'
 $commands = [System.Collections.Generic.List[string]]::new()
@@ -104,7 +105,7 @@ $commands.Add('if errorlevel 1 exit /b 1')
 $commands.Add("$compile $(Quote (Join-Path $repoRoot 'installer\main.cpp')) $installObjArgs $(Quote (Join-Path $buildRoot 'PiuCompanionSetup.res')) /Fo$(Quote (Join-Path $objectRoot 'setup.obj')) /Fe$(Quote (Join-Path $distRoot 'PiuCompanionSetup.exe')) $link /SUBSYSTEM:WINDOWS $libs")
 $commands.Add('if errorlevel 1 exit /b 1')
 if ($Test) {
-    $commands.Add("$compile $(Quote (Join-Path $repoRoot 'tests\checks.cpp')) $objArgs $(Quote (Join-Path $objectRoot 'install.obj')) $(Quote (Join-Path $objectRoot 'setup_view.obj')) $(Quote (Join-Path $buildRoot 'PiuCompanion.res')) /Fo$(Quote (Join-Path $objectRoot 'checks.obj')) /Fe$(Quote (Join-Path $buildRoot 'Checks.exe')) $link /SUBSYSTEM:CONSOLE $libs")
+    $commands.Add("$compile $(Quote (Join-Path $repoRoot 'tests\checks.cpp')) $(Quote (Join-Path $repoRoot 'tests\update_checks.cpp')) $objArgs $(Quote (Join-Path $objectRoot 'install.obj')) $(Quote (Join-Path $objectRoot 'setup_view.obj')) $(Quote (Join-Path $buildRoot 'PiuCompanion.res')) /Fo$(Quote ($objectRoot + '/')) /Fe$(Quote (Join-Path $buildRoot 'Checks.exe')) $link /SUBSYSTEM:CONSOLE $libs")
     $commands.Add('if errorlevel 1 exit /b 1')
 }
 foreach ($name in @('PiuCompanion', 'PiuCompanionSetup')) {

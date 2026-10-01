@@ -15,7 +15,7 @@ Automatically upload your XSanity personal bests to [PIU Scores](https://piuscor
 4. Enter your personal PIU Scores API token and select **Phoenix** or **Phoenix 2** to match your scores.
 5. Open **Play XSanity** from the Start menu to launch the game and companion together.
 
-The tray icon gives you **Account settings**, **Manage installation**, and **Exit**. Closing the game leaves the companion running.
+The tray icon gives you **Account settings**, **Check for updates**, **Manage installation**, and **Exit**. Closing the game leaves the companion running.
 
 ## Set up the OBS overlay
 
@@ -36,9 +36,11 @@ Close XSanity, then open **Manage installation** from the Start menu or tray. Yo
 | To… | Do this |
 | --- | --- |
 | Add or remove a component | Change its checkbox and click **Apply changes**. |
-| Update | Open the **latest downloaded installer** and click **Apply changes**. |
+| Update | Choose **Check for updates** from the tray, then **Download and open setup**. Click **Apply changes** in setup. |
 | Move your game folder | Exit the companion before moving it. Select the new folder in setup and click **Apply changes**. |
 | Uninstall everything | Clear both checkboxes and click **Remove all**. |
+
+If your version has no **Check for updates** menu item, download and run the [latest installer](https://github.com/mat100payette/XSanityPIUScoresHook/releases/latest) once. No uninstall is needed.
 
 - Updates and moves preserve account settings and pending uploads while syncing stays enabled. The OBS URL stays the same.
 - Removing syncing discards pending uploads. Enabling it again captures new plays only.

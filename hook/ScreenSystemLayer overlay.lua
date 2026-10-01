@@ -1,5 +1,5 @@
 -- PIU Companion: exports live chart + completed result only. No score-history reads.
--- Install as Themes/xsanity/BGAnimations/ScreenSystemLayer aux.lua after approval.
+-- Extend the system overlay that XSanity actually loads; retain its built-in actors.
 local root = "Save/PiuCompanion/"
 local session = tostring(math.floor(GetTimeSinceStart() * 1000))
     .. "-"
@@ -143,7 +143,8 @@ local function tick(delta)
 end
 
 return Def.ActorFrame({
-    OnCommand = function(self)
+    LoadActor("/Themes/_fallback/BGAnimations/ScreenSystemLayer overlay"),
+    InitCommand = function(self)
         self:SetUpdateFunction(function(_, delta)
             local ok = pcall(tick, delta)
             if not ok and not warned then

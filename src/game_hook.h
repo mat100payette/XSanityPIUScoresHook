@@ -20,6 +20,7 @@ public:
     }
 
     static fs::path validate(const fs::path& root);
+    static constexpr wchar_t LayerName[] = L"ScreenSystemLayer overlay.lua";
     static fs::path layer(const fs::path& root);
     static fs::path exports(const fs::path& root);
     static std::string fingerprint(std::string_view source);
