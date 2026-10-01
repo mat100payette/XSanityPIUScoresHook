@@ -1,9 +1,14 @@
 #pragma once
 #include "ui.h"
+#include "support.h"
 #include <wincodec.h>
 
 inline void save_window_preview(
     HWND window, const piu::fs::path& path, bool client_only = false, bool full_content = false) {
+    if (!piu::test::previews) {
+        return;
+    }
+
     RECT rect{};
     if (client_only) {
         GetClientRect(window, &rect);

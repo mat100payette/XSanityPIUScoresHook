@@ -1,3 +1,4 @@
+#include "support.h"
 #include "update.h"
 #include "preview.h"
 #include "game_hook.h"
@@ -8,28 +9,8 @@
 
 using namespace piu;
 
+namespace piu::test {
 namespace {
-int checks = 0;
-
-void expect(bool condition, const char* label) {
-    if (!condition) {
-        throw Error(std::string("FAILED update check: ") + label);
-    }
-
-    ++checks;
-}
-
-template <typename F> void refuses(F&& action, const char* label) {
-    bool rejected = false;
-    try {
-        action();
-    } catch (...) {
-        rejected = true;
-    }
-
-    expect(rejected, label);
-}
-
 std::string payload() {
     std::string bytes(256, '\0');
     bytes.replace(0, 2, "MZ");
@@ -81,12 +62,12 @@ struct ReleaseFixture {
                 }
 
                 if (url == release.checksum.url) {
-                    expect(limit == checksum.size(), "checksum request is bounded");
+                    check(limit == checksum.size(), "checksum request is bounded");
                     return checksum;
                 }
 
-                expect(url == release.installer.url, "download uses exact release asset");
-                expect(limit == bytes.size(), "installer request is bounded");
+                check(url == release.installer.url, "download uses exact release asset");
+                check(limit == bytes.size(), "installer request is bounded");
                 if (progress) {
                     progress(bytes.size(), limit);
                 }
@@ -97,17 +78,17 @@ struct ReleaseFixture {
 };
 
 void metadata_checks() {
-    expect(sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    check(sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         "SHA-256 matches standard vector");
-    expect(sha256("a\r\n") != sha256("a\n"), "binary integrity does not normalize line endings");
+    check(sha256("a\r\n") != sha256("a\n"), "binary integrity does not normalize line endings");
     ReleaseFixture newer("0.10.0");
-    expect(select_update(newer.metadata, "0.9.9").has_value(), "numeric version comparison");
-    expect(!select_update(newer.metadata, "0.10.0"), "same version is not an update");
-    expect(!select_update(newer.metadata, "1.0.0"), "older release cannot downgrade installed build");
+    check(select_update(newer.metadata, "0.9.9").has_value(), "numeric version comparison");
+    check(!select_update(newer.metadata, "0.10.0"), "same version is not an update");
+    check(!select_update(newer.metadata, "1.0.0"), "older release cannot downgrade installed build");
     for (const auto* bad : {"0.1", "0.1.2.3", "-1.2.3", "1.2.3-beta", "01.2.3", "1.2.65535", "x.y.z"}) {
         auto release = parse(encode(newer.metadata));
         put(release, L"tag_name", std::string("v") + bad);
-        refuses(
+        rejects(
             [&] {
                 select_update(release, "0.0.0");
             },
@@ -117,7 +98,7 @@ void metadata_checks() {
     for (const auto* key : {L"draft", L"prerelease"}) {
         auto release = parse(encode(newer.metadata));
         put(release, key, true);
-        refuses(
+        rejects(
             [&] {
                 select_update(release, "0.0.0");
             },
@@ -152,7 +133,7 @@ void metadata_checks() {
             break;
         }
 
-        refuses(
+        rejects(
             [&] {
                 select_update(release, "0.0.0");
             },
@@ -164,7 +145,7 @@ void metadata_checks() {
              std::string(
                  "https://release-assets.githubusercontent.com/github-production-release-asset/123?a=b"),
              std::string("https://objects.githubusercontent.com/github-production-release-asset/123")}) {
-        expect(allowed_update_url(url), "official release and CDN addresses accepted");
+        check(allowed_update_url(url), "official release and CDN addresses accepted");
     }
 
     for (const auto* url : {"http://github.com/mat100payette/XSanityPIUScoresHook/releases/download/v1/a",
@@ -176,29 +157,29 @@ void metadata_checks() {
              "https://release-assets.githubusercontent.com/a#fragment",
              "https://release-assets.githubusercontent.com/a\r\nOther: header",
              "file:///C:/setup.exe"}) {
-        expect(!allowed_update_url(url), "unsafe update addresses refused");
+        check(!allowed_update_url(url), "unsafe update addresses refused");
     }
 }
 
 void download_checks() {
     ReleaseFixture fixture;
-    expect(verify_update(fixture.release, fixture.bytes, fixture.checksum) == sha256(fixture.bytes),
+    check(verify_update(fixture.release, fixture.bytes, fixture.checksum) == sha256(fixture.bytes),
         "published checksum verifies the exact installer");
     auto bad = fixture.bytes;
     bad.back() = 'x';
-    refuses(
+    rejects(
         [&] {
             verify_update(fixture.release, bad, fixture.checksum);
         },
         "checksum mismatch refused");
-    refuses(
+    rejects(
         [&] {
             verify_update(fixture.release, fixture.bytes.substr(1), fixture.checksum);
         },
         "truncated download refused");
     auto checksum = fixture.checksum;
     checksum[checksum.size() - 2] = 'x';
-    refuses(
+    rejects(
         [&] {
             verify_update(fixture.release, fixture.bytes, checksum);
         },
@@ -206,14 +187,14 @@ void download_checks() {
     auto invalid = fixture.bytes;
     invalid[0] = 'x';
     auto hash = sha256(invalid) + "  " + fixture.release.installer.name + "\n";
-    refuses(
+    rejects(
         [&] {
             verify_update(fixture.release, invalid, hash);
         },
         "nonexecutable payload refused");
 
     auto client = fixture.client();
-    expect(client.check("0.0.0")->version == fixture.version, "client checks published version");
+    check(client.check("0.0.0")->version == fixture.version, "client checks published version");
     fs::path staged;
     bool progress = false;
     {
@@ -221,10 +202,10 @@ void download_checks() {
             progress = received == total && total == fixture.bytes.size();
         });
         staged = update->file();
-        expect(is_maintenance_directory(staged.parent_path()) && read(staged) == fixture.bytes,
+        check(is_maintenance_directory(staged.parent_path()) && read(staged) == fixture.bytes,
             "verified installer staged outside game using maintenance cleanup contract");
-        expect(progress, "download reports progress");
-        refuses(
+        check(progress, "download reports progress");
+        rejects(
             [&] {
                 update->open([](const fs::path&, std::wstring_view) {
                     throw Error("launch failed");
@@ -233,49 +214,48 @@ void download_checks() {
             "launch failure is reported");
     }
 
-    expect(!fs::exists(staged.parent_path()), "cancelled or failed handoff removes its temporary folder");
+    check(!fs::exists(staged.parent_path()), "cancelled or failed handoff removes its temporary folder");
     {
         auto update = client.download(fixture.release);
         staged = update->file();
         atomic_write(staged, "modified");
         bool opened = false;
-        refuses(
+        rejects(
             [&] {
                 update->open([&](const fs::path&, std::wstring_view) {
                     opened = true;
                 });
             },
             "changed installer rejected immediately before launch");
-        expect(!opened, "unverified bytes are never executed");
+        check(!opened, "unverified bytes are never executed");
     }
 
-    expect(!fs::exists(staged.parent_path()), "changed payload cleaned up");
+    check(!fs::exists(staged.parent_path()), "changed payload cleaned up");
     {
         auto update = client.download(fixture.release);
         staged = update->file();
         update->open([&](const fs::path& file, std::wstring_view args) {
-            expect(
-                file == staged && args == L"--maintenance-copy", "handoff reuses normal maintenance setup");
+            check(file == staged && args == L"--maintenance-copy", "handoff reuses normal maintenance setup");
             Handle overwrite(CreateFileW(
                 file.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr));
-            expect(
+            check(
                 overwrite.get() == INVALID_HANDLE_VALUE, "verified installer locked through process launch");
         });
     }
 
-    expect(fs::exists(staged), "successful handoff leaves cleanup to the running installer");
+    check(fs::exists(staged), "successful handoff leaves cleanup to the running installer");
     safe_path(staged);
     fs::remove(staged);
     fs::remove(staged.parent_path());
 
     std::stop_source stopped;
     stopped.request_stop();
-    refuses(
+    rejects(
         [&] {
             client.check("0.0.0", stopped.get_token());
         },
         "cancel before check");
-    refuses(
+    rejects(
         [&] {
             client.download(fixture.release, stopped.get_token());
         },
@@ -287,17 +267,17 @@ void download_checks() {
         mid.request_stop();
         return fixture.checksum;
     });
-    refuses(
+    rejects(
         [&] {
             cancelled.download(fixture.release, mid.get_token());
         },
         "cancel between checksum and binary");
-    expect(calls == 1, "cancellation prevents subsequent requests");
+    check(calls == 1, "cancellation prevents subsequent requests");
     UpdateClient offline(
         [](const std::string&, size_t, std::stop_token, const UpdateProgress&) -> std::string {
             throw Error("offline");
         });
-    refuses(
+    rejects(
         [&] {
             offline.check("0.0.0");
         },
@@ -305,18 +285,29 @@ void download_checks() {
     UpdateClient unpublished([](const std::string&, size_t, std::stop_token, const UpdateProgress&) {
         return std::string{};
     });
-    refuses(
+    rejects(
         [&] {
             unpublished.check("0.0.0");
         },
         "missing release must not report up to date");
 }
 
+enum class DialogCase {
+    Install,
+    CancelCheck,
+    ShutdownCheck,
+    Offline,
+    Current,
+    Decline,
+    CancelDownload,
+    ShutdownDownload
+};
+
 // Drive the real native dialog with fake downloads. Never launch an executable.
 struct DialogDriver {
     HWND active = nullptr;
     HANDLE shutdown;
-    int mode;
+    DialogCase mode;
     bool clicked = false, cancelled = false, timed_out = false, captured = false;
     std::exception_ptr error;
     ULONGLONG deadline = GetTickCount64() + 10000;
@@ -361,16 +352,16 @@ struct DialogDriver {
             return;
         }
 
-        if ((mode == 1 || mode == 2) && !cancelled) {
+        if ((mode == DialogCase::CancelCheck || mode == DialogCase::ShutdownCheck) && !cancelled) {
             cancelled = true;
-            if (mode == 1) {
+            if (mode == DialogCase::CancelCheck) {
                 PostMessageW(active, TDM_CLICK_BUTTON, IDCANCEL, 0);
             } else {
                 SetEvent(shutdown);
             }
         } else if (has_button(active, L"Download and open setup") && !clicked) {
             clicked = true;
-            if (mode == 5) {
+            if (mode == DialogCase::Decline) {
                 PostMessageW(active, TDM_CLICK_BUTTON, IDCANCEL, 0);
             } else {
                 capture(L"update-available.png");
@@ -380,13 +371,13 @@ struct DialogDriver {
                    !has_button(active, L"Close")) {
             captured = true;
             capture(L"update-downloading.png");
-            if (mode == 6) {
+            if (mode == DialogCase::CancelDownload) {
                 PostMessageW(active, TDM_CLICK_BUTTON, IDCANCEL, 0);
-            } else if (mode == 7) {
+            } else if (mode == DialogCase::ShutdownDownload) {
                 SetEvent(shutdown);
             }
         } else if (has_button(active, L"Close")) {
-            capture(mode == 3 ? L"update-error.png" : L"update-current.png");
+            capture(mode == DialogCase::Offline ? L"update-error.png" : L"update-current.png");
             PostMessageW(active, TDM_CLICK_BUTTON, IDCLOSE, 0);
         }
     }
@@ -402,8 +393,15 @@ struct DialogDriver {
 };
 
 void dialog_checks() {
-    for (int mode = 0; mode < 8; ++mode) {
-        ReleaseFixture fixture(mode == 4 ? "0.0.1" : "60000.0.0");
+    for (auto mode : {DialogCase::Install,
+             DialogCase::CancelCheck,
+             DialogCase::ShutdownCheck,
+             DialogCase::Offline,
+             DialogCase::Current,
+             DialogCase::Decline,
+             DialogCase::CancelDownload,
+             DialogCase::ShutdownDownload}) {
+        ReleaseFixture fixture(mode == DialogCase::Current ? "0.0.1" : "60000.0.0");
         std::atomic<bool> cancelled = false;
         int downloads = 0;
         UpdateClient client([&](const std::string& url, size_t, std::stop_token stop, const UpdateProgress&) {
@@ -412,7 +410,9 @@ void dialog_checks() {
                 ++downloads;
             }
 
-            if (mode == 1 || mode == 2 || ((mode == 6 || mode == 7) && downloading)) {
+            if (mode == DialogCase::CancelCheck || mode == DialogCase::ShutdownCheck ||
+                ((mode == DialogCase::CancelDownload || mode == DialogCase::ShutdownDownload) &&
+                    downloading)) {
                 while (!stop.stop_requested()) {
                     Sleep(10);
                 }
@@ -421,7 +421,7 @@ void dialog_checks() {
                 throw UpdateCancelled{};
             }
 
-            if (mode == 3) {
+            if (mode == DialogCase::Offline) {
                 throw Error("Simulated offline connection.");
             }
 
@@ -458,14 +458,18 @@ void dialog_checks() {
         }
 
         if (driver.timed_out) {
-            throw Error("Update dialog timed out in test mode " + std::to_string(mode));
+            throw Error("Update dialog timed out in test mode " + std::to_string(static_cast<int>(mode)));
         }
 
-        expect(!driver.active, "native update dialog releases its window");
-        expect(opened == (mode == 0), "only confirmed successful download opens setup");
-        expect(cancelled == (mode == 1 || mode == 2 || mode == 6 || mode == 7),
+        check(!driver.active, "native update dialog releases its window");
+        check(opened == (mode == DialogCase::Install), "only confirmed successful download opens setup");
+        check(cancelled == (mode == DialogCase::CancelCheck || mode == DialogCase::ShutdownCheck ||
+                               mode == DialogCase::CancelDownload || mode == DialogCase::ShutdownDownload),
             "cancel and companion shutdown stop checking and downloading");
-        expect(downloads == ((mode == 0 || mode == 6 || mode == 7) ? 1 : 0),
+        check(downloads == ((mode == DialogCase::Install || mode == DialogCase::CancelDownload ||
+                                mode == DialogCase::ShutdownDownload)
+                                   ? 1
+                                   : 0),
             "downloads require confirmation and a newer release");
         if (!staged.empty()) {
             safe_path(staged);
@@ -476,11 +480,10 @@ void dialog_checks() {
 }
 } // namespace
 
-int update_checks() {
+void update_checks() {
     metadata_checks();
     download_checks();
     dialog_checks();
-    return checks;
 }
 
 int update_network_check() {
@@ -495,3 +498,4 @@ int update_network_check() {
               << " using the production GitHub transport. Installer was not executed.\n";
     return 0;
 }
+} // namespace piu::test

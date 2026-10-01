@@ -8,9 +8,11 @@ Keep changes focused and the companion small. Discuss larger behavior changes in
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Test -Package
 ```
 
-Install Visual Studio Build Tools with **Desktop development with C++**, the MSVC x64 tools, and Windows SDK. The build uses C++20. Warnings fail the build. Follow `.editorconfig`; behavioral checks in `tests/checks.cpp` use disposable game folders, a fake API, and fake installation registration. Installer checks cover native accessibility, mouse/keyboard input, display scaling, scrolling, and themed screen previews.
+Install Visual Studio Build Tools with **Desktop development with C++**, the MSVC x64 tools, and Windows SDK. The build uses C++20. Warnings fail the build. Follow `.editorconfig`; tests are grouped by feature in `tests/*_checks.cpp`, with shared assertions and disposable fixtures in `tests/support.h`. They use fake APIs and installation registration. Installer checks cover rollback, native accessibility, mouse/keyboard input, display scaling, scrolling, and repaint behavior.
 
-Lua exporter checks run as part of the test build using a local Lua 5.1.5 interpreter, built from the checksum-verified official source and cached under build/tools. The first test build needs internet access; the interpreter is only a development tool and is not packaged. The tests exercise actor initialization, current-chart heartbeats, result capture, eligibility, duplicate prevention, and write failures.
+Lua exporter checks run as part of the test build using a local Lua 5.1.5 interpreter, built from the checksum-verified official source and cached under build/tools. The first test build needs internet access; the interpreter is only a development tool and is not packaged. The tests exercise actor initialization, current-chart heartbeats, result capture, eligibility, duplicate prevention, component isolation, and error reporting. A separate native integration test reads the shipped hook's mailbox from an isolated Lua process.
+
+After building, run `build/Release/Checks.exe` for all native suites or add `--suite engine`, `--suite installer`, `--suite setup`, etc. Each suite prints its duration; failed assertions include the source file and line. For manual visual review, add `--previews` to save PNGs beside the test executable. Normal runs still test UI behavior without generating screenshots.
 
 Open [XSanityPIUScoresHook.code-workspace](XSanityPIUScoresHook.code-workspace) in VS Code for editor settings and the **Build**, **Check**, and **Package** tasks.
 

@@ -1,3 +1,4 @@
+#include "support.h"
 #include "mailbox.h"
 #include "game_hook.h"
 #include <cmath>
@@ -5,17 +6,8 @@
 
 using namespace piu;
 
+namespace piu::test {
 namespace {
-int passed = 0;
-
-void check(bool condition, const char* message) {
-    if (!condition) {
-        throw Error(std::string("Mailbox: ") + message);
-    }
-
-    ++passed;
-}
-
 MailboxBlock block(std::string_view text) {
     MailboxBlock data{};
     for (auto& slot : data) {
@@ -132,7 +124,7 @@ void live_checks() {
 }
 } // namespace
 
-int mailbox_checks() {
+void mailbox_checks() {
     std::string text = R"({"current":{"playing":false,"title":"éあ\\\""}})";
     auto valid = block(text);
     auto decoded = decode_mailbox(valid, valid);
@@ -164,7 +156,8 @@ int mailbox_checks() {
     changed[8].value = std::numeric_limits<double>::infinity();
     check(!decode_mailbox(changed, changed), "rejects an invalid game clock");
     auto maximum = block(std::string(6090, 'x'));
-    check(decode_mailbox(maximum, maximum)->payload.size() == 6090, "accepts the exact capacity");
+    auto full = decode_mailbox(maximum, maximum);
+    check(full && full->payload.size() == 6090, "accepts the exact capacity");
     auto hook = GameHook{};
     auto overlay = hook.configured(false, true);
     check(overlay.source().find("local capture_results = false") != std::string::npos &&
@@ -173,5 +166,6 @@ int mailbox_checks() {
     check(hook.configured(true, false).source().find("local publish_chart = false") != std::string::npos,
         "installer omits current-chart publishing in sync-only source");
     live_checks();
-    return passed;
 }
+
+} // namespace piu::test

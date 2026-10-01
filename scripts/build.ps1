@@ -108,7 +108,9 @@ $commands.Add('if errorlevel 1 exit /b 1')
 $commands.Add("$compile $(Quote (Join-Path $repoRoot 'installer\main.cpp')) $installObjArgs $(Quote (Join-Path $buildRoot 'PiuCompanionSetup.res')) /Fo$(Quote (Join-Path $objectRoot 'setup.obj')) /Fe$(Quote (Join-Path $distRoot 'PiuCompanionSetup.exe')) $link /SUBSYSTEM:WINDOWS $libs")
 $commands.Add('if errorlevel 1 exit /b 1')
 if ($Test) {
-    $commands.Add("$compile $(Quote (Join-Path $repoRoot 'tests\checks.cpp')) $(Quote (Join-Path $repoRoot 'tests\update_checks.cpp')) $(Quote (Join-Path $repoRoot 'tests\mailbox_checks.cpp')) $objArgs $(Quote (Join-Path $objectRoot 'install.obj')) $(Quote (Join-Path $objectRoot 'setup_view.obj')) $(Quote (Join-Path $buildRoot 'PiuCompanion.res')) /Fo$(Quote ($objectRoot + '/')) /Fe$(Quote (Join-Path $buildRoot 'Checks.exe')) $link /SUBSYSTEM:CONSOLE $libs")
+    $testSources = (Get-ChildItem -LiteralPath (Join-Path $repoRoot 'tests') -Filter '*.cpp' -File |
+        Sort-Object Name | ForEach-Object { Quote $_.FullName }) -join ' '
+    $commands.Add("$compile $testSources $objArgs $(Quote (Join-Path $objectRoot 'install.obj')) $(Quote (Join-Path $objectRoot 'setup_view.obj')) $(Quote (Join-Path $buildRoot 'PiuCompanion.res')) /Fo$(Quote ($objectRoot + '/')) /Fe$(Quote (Join-Path $buildRoot 'Checks.exe')) $link /SUBSYSTEM:CONSOLE $libs")
     $commands.Add('if errorlevel 1 exit /b 1')
 }
 foreach ($name in @('PiuCompanion', 'PiuCompanionSetup')) {
