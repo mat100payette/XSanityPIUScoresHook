@@ -60,7 +60,7 @@ local function fixture(options)
                 return options.broken or false
             end,
             GetAutoPlay = function()
-                return options.used_autoplay or false
+                return options.used_autoplay or 0
             end,
             GetTapNoteScores = function(_, name)
                 if options.missing_counts then
@@ -296,7 +296,7 @@ for _, options in ipairs({
     { rate = 1.5 },
     { current_rate = 0.8 },
     { disqualified = true },
-    { used_autoplay = true },
+    { used_autoplay = 1 },
     { controller = "PlayerController_Autoplay" },
     { mods = "EasyJudgement" },
     { mods = "NormalJudgement, HardJudgement" },
@@ -331,7 +331,7 @@ for _, case in ipairs({
     { { mods = "EasyJudgement" }, "judgement" },
     { { mods = "NoHolds" }, "notes" },
     { { mode = "Quest" }, "mode" },
-    { { used_autoplay = true }, "autoplay" },
+    { { used_autoplay = 1 }, "autoplay" },
     { { description = "UCS S14" }, "chart" },
     { { disqualified = true }, "disqualified" },
     { { mods_error = true }, "capture_error" },
@@ -439,6 +439,11 @@ finish:tick("ScreenGameplay")
 at_finish.current_rate = 0.9
 finish:tick("ScreenEvaluation")
 check(finish.result:find('"eligible":false', 1, true), "evaluation checks the final settings too")
+
+local invalid_autoplay = fixture({ used_autoplay = "unknown" })
+invalid_autoplay:tick("ScreenGameplay")
+invalid_autoplay:tick("ScreenEvaluation")
+check(not invalid_autoplay.result, "unknown autoplay API values cannot become valid uploads")
 
 local unknown_plate = fixture({ missing_counts = true })
 unknown_plate:tick("ScreenGameplay")

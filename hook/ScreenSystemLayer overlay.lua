@@ -278,9 +278,15 @@ end
 
 local function capture(c)
     local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(c.player)
+    -- XSanity exposes this flag as numeric 0/1; Lua considers 0 truthy.
+    local autoplay = stats:GetAutoPlay()
+    if autoplay ~= 0 and autoplay ~= 1 then
+        error("Unexpected GetAutoPlay result")
+    end
+
     local reason = c.skip_reason or attempt_rejection(c)
     if not reason then
-        if stats:GetAutoPlay() then
+        if autoplay == 1 then
             reason = "autoplay"
         elseif stats:IsDisqualified() then
             reason = "disqualified"

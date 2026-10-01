@@ -117,7 +117,7 @@ STATSMAN = {
                         return false
                     end,
                     GetAutoPlay = function()
-                        return false
+                        return 0
                     end,
                     IsDisqualified = function()
                         return false
