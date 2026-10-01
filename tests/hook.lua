@@ -45,9 +45,7 @@ local function fixture(options)
                     error("options unavailable")
                 end
 
-                return (level == "ModsLevel_Current" and options.current_mods)
-                    or options.mods
-                    or "NormalJudgement"
+                return (level == "ModsLevel_Current" and options.current_mods) or options.mods or ""
             end,
             GetPlayerController = function()
                 return options.controller or "PlayerController_Human"
@@ -328,6 +326,33 @@ for _, options in ipairs({
     )
 end
 
+for _, case in ipairs({
+    { { rate = 0.8 }, "rate" },
+    { { mods = "EasyJudgement" }, "judgement" },
+    { { mods = "NoHolds" }, "notes" },
+    { { mode = "Quest" }, "mode" },
+    { { used_autoplay = true }, "autoplay" },
+    { { description = "UCS S14" }, "chart" },
+    { { disqualified = true }, "disqualified" },
+    { { mods_error = true }, "capture_error" },
+}) do
+    local rejected = fixture(case[1])
+    rejected:tick("ScreenGameplay")
+    rejected:tick("ScreenEvaluation")
+    check(
+        rejected.result:find('"skip_reason":"' .. case[2] .. '"', 1, true),
+        "specific rejection: " .. case[2]
+    )
+    local id = rejected.result:match('"id":"(.-)"')
+    rejected.feedback = "PIUCOMPANION 1\n" .. id .. "\tskipped_" .. case[2] .. "\n"
+    rejected:tick("ScreenEvaluation", 0.5)
+    local text = rejected.cards[1]:GetChild("Message").values.settext[1]
+    check(
+        text:find("Not submitted", 1, true) and text ~= "Not submitted - unsupported play",
+        "specific reason reaches the card"
+    )
+end
+
 -- Check the plate boundaries and checkpoint judgements against the installed theme.
 for _, case in ipairs({
     { "PG", { W1 = 50, W2 = 25, CheckpointHit = 25 } },
@@ -356,6 +381,10 @@ broken:tick("ScreenEvaluation")
 check(not broken.result:find('"plate"', 1, true), "a failed stage carries no plate")
 
 for _, mods in ipairs({
+    "",
+    "m550, BgaOff",
+    "NormalJudgement, BgaOff",
+    "0% NoHolds, 0% EasyJudgement",
     "NormalJudgement, 5x",
     "NormalJudgement, m550, Mini, Dark, Hidden",
     "NormalJudgement, Mirror, Reverse",
@@ -390,6 +419,7 @@ for _, change in ipairs({
         changed.result:find('"eligible":false', 1, true),
         "invalid setting is latched until the attempt ends"
     )
+    check(changed.result:find('"skip_reason":', 1, true), "latched rejection retains its reason")
 end
 
 local initial_error = { mods_error = true }

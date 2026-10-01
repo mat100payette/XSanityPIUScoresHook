@@ -251,9 +251,9 @@ void live_checks() {
         command("tick\n");
         Sleep(30);
         rendered = read(folder / L"notifications.txt");
-    } while (rendered != "PB submitted\nNot submitted - unsupported play\n" && GetTickCount64() < until);
-    check(rendered == "PB submitted\nNot submitted - unsupported play\n",
-        "swapped result cards show the correct accepted and unsupported outcomes");
+    } while (rendered != "PB submitted\nNot submitted - altered judgement\n" && GetTickCount64() < until);
+    check(rendered == "PB submitted\nNot submitted - altered judgement\n",
+        "swapped result cards show the correct accepted and specific judgement outcomes");
     DWORD written = 0;
     WriteFile(commands.get(), "quit\n", 5, &written, nullptr);
     check(WaitForSingleObject(child.get(), 5000) == WAIT_OBJECT_0, "child exits normally");

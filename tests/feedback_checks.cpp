@@ -91,6 +91,30 @@ void feedback_checks() {
     engine.capture(unknown, now());
     check(status().find("unknown\tunlinked") != std::string::npos && engine.pending_count(0) == 0,
         "unmatched profiles get a useful explanation without uploading");
+    for (const auto& reason : {"rate",
+             "judgement",
+             "notes",
+             "mode",
+             "autoplay",
+             "chart",
+             "profile_changed",
+             "disqualified",
+             "capture_error"}) {
+        auto skipped = result(std::string("skip-") + reason);
+        skipped.eligible = false;
+        skipped.skip_reason = reason;
+        engine.capture(result_from_json(result_json(skipped)), now());
+        auto expected = std::string("skipped_") + reason;
+        check(status().find(skipped.id + "\t" + expected) != std::string::npos &&
+                  load_store(state).receipts.at(skipped.id) == expected && engine.pending_count(0) == 0,
+            "specific rejection survives export parsing, persistence and feedback without queuing");
+    }
+
+    auto unknown_reason = result("unknown-reason");
+    unknown_reason.skip_reason = "bad\nrecord";
+    engine.capture(unknown_reason, now());
+    check(status().find("unknown-reason\tskipped\n") != std::string::npos && engine.pending_count(0) == 0,
+        "unknown reasons stay ineligible and cannot inject feedback records");
     engine.capture(result("offline"), now());
     api.offline = true;
     rejects(

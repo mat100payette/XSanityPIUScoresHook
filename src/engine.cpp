@@ -6,6 +6,33 @@
 
 namespace piu {
 namespace {
+struct SkippedPlay {
+    std::string code;
+    std::string message;
+};
+
+SkippedPlay skipped_play(const Result& result) {
+    static const std::map<std::string, std::string> reasons = {
+        {"rate", "music rate changed"},
+        {"judgement", "altered judgement"},
+        {"notes", "note-changing modifiers"},
+        {"mode", "unsupported game mode"},
+        {"autoplay", "autoplay used"},
+        {"chart", "unsupported chart"},
+        {"profile_changed", "profile changed during play"},
+        {"disqualified", "game marked play disqualified"},
+        {"capture_error", "could not verify play settings"},
+        {"score", "invalid score"},
+    };
+    auto reason = result.score < 0 || result.score > 1000000 ? "score" : result.skip_reason;
+    auto found = reasons.find(reason);
+    if (found == reasons.end()) {
+        return {"skipped", "Not submitted: unsupported play (reason unavailable)."};
+    }
+
+    return {"skipped_" + reason, "Not submitted: " + found->second + "."};
+}
+
 struct UploadFailure {
     std::string state;
     std::string message;
@@ -243,10 +270,11 @@ void Engine::capture(const Result& result, uint64_t written) {
     }
 
     auto previous = data_;
-    if (!result.eligible || result.score < 0 || result.score > 1000000) {
-        data_.receipts[result.id] = "skipped";
-        feedback_.update(result.id, "skipped");
-        status_ = "Skipped a result with unsupported chart, modifiers, or autoplay.";
+    if (!result.eligible || !result.skip_reason.empty() || result.score < 0 || result.score > 1000000) {
+        auto skipped = skipped_play(result);
+        data_.receipts[result.id] = skipped.code;
+        feedback_.update(result.id, skipped.code);
+        status_ = skipped.message;
     } else {
         data_.pending.push_back({result, config_.mix, iso_time(written), "queued", account});
         feedback_.update(result.id, "checking");

@@ -133,7 +133,7 @@ void engine_checks() {
     auto out_of_range = result("invalid", 1000001);
     restarted.capture(out_of_range, now());
     check(restarted.store().receipts.at("autoplay") == "skipped" &&
-              restarted.store().receipts.at("invalid") == "skipped",
+              restarted.store().receipts.at("invalid") == "skipped_score",
         "ineligible and out of range results are skipped");
     Score broken_best{"x", 990000, true};
     check(better(result("clear", 100), &broken_best), "clear takes priority over broken numeric score");

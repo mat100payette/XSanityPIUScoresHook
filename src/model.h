@@ -53,6 +53,7 @@ struct Result {
     std::string profile;
     int side = 0;
     bool ambiguous = false;
+    std::string skip_reason;
 };
 
 struct Pending {

@@ -119,24 +119,25 @@ local changed_notes = {
     wide = true,
 }
 
-local function normal_modifiers(mods)
-    local normal = false
+local function modifier_rejection(mods)
     for token in mods:lower():gmatch("[^,]+") do
         local name = token:match("([a-z]+)%s*$")
-        if name == "normaljudgement" then
-            normal = true
-        elseif
-            name and (changed_notes[name] or name:find("judgement", 1, true) or name == "judgereverse")
-        then
-            return false
+        -- Normal judgement may be implicit; only active alterations reject a play.
+        local amount = token:match("^%s*([%+%-]?[%d%.]+)%%")
+        if name and tonumber(amount) ~= 0 then
+            if name ~= "normaljudgement" and (name:find("judgement", 1, true) or name == "judgereverse") then
+                return "judgement"
+            elseif changed_notes[name] then
+                return "notes"
+            end
         end
     end
-    return normal
+    return nil
 end
 
-local function eligible_play(player)
+local function play_rejection(player)
     if not GAMESTATE:IsHumanPlayer(player) then
-        return false
+        return "autoplay"
     end
 
     local mode = GAMESTATE:GetGameMode()
@@ -147,23 +148,25 @@ local function eligible_play(player)
         or GAMESTATE:GetMusicTrainChannel()
         or GAMESTATE:GetProgressiveChannel()
     then
-        return false
+        return "mode"
     end
 
     local state = GAMESTATE:GetPlayerState(player)
     if not tostring(state:GetPlayerController()):lower():match("human$") then
-        return false
+        return "autoplay"
     end
 
     for _, level in ipairs({ "ModsLevel_Song", "ModsLevel_Current" }) do
-        if
-            GAMESTATE:GetSongOptionsObject(level):MusicRate() ~= 1
-            or not normal_modifiers(state:GetPlayerOptionsString(level))
-        then
-            return false
+        if GAMESTATE:GetSongOptionsObject(level):MusicRate() ~= 1 then
+            return "rate"
+        end
+
+        local reason = modifier_rejection(state:GetPlayerOptionsString(level))
+        if reason then
+            return reason
         end
     end
-    return true
+    return nil
 end
 
 -- Match xsanity's ScreenEvaluation plate rules, including hold checkpoints.
@@ -250,7 +253,7 @@ local function chart(player, side)
         kind = kind,
         level = level,
         label = description ~= "" and description or label,
-        eligible = (description == "" or description:upper() == label),
+        skip_reason = (description ~= "" and description:upper() ~= label) and "chart" or nil,
     }
 end
 
@@ -265,15 +268,26 @@ local function fields(c)
         .. quote(c.label)
 end
 
+local function attempt_rejection(c)
+    local name, guid = profile(c.player)
+    if name ~= c.profile or guid ~= c.guid then
+        return "profile_changed"
+    end
+    return play_rejection(c.player)
+end
+
 local function capture(c)
     local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(c.player)
-    local name, guid = profile(c.player)
-    local eligible = c.eligible
-        and name == c.profile
-        and guid == c.guid
-        and eligible_play(c.player)
-        and not stats:IsDisqualified()
-        and not stats:GetAutoPlay()
+    local reason = c.skip_reason or attempt_rejection(c)
+    if not reason then
+        if stats:GetAutoPlay() then
+            reason = "autoplay"
+        elseif stats:IsDisqualified() then
+            reason = "disqualified"
+        end
+    end
+
+    local eligible = reason == nil
     local score, broken = stats:GetPhoenixScore(), stats:GetFailedAux()
     local award = eligible and plate(stats, broken) or nil
     return '{"id":'
@@ -292,6 +306,7 @@ local function capture(c)
         .. tostring(broken)
         .. ',"eligible":'
         .. tostring(eligible)
+        .. (reason and (',"skip_reason":' .. quote(reason)) or "")
         .. (award and (',"plate":' .. quote(award)) or "")
         .. "}"
 end
@@ -302,10 +317,13 @@ local function update_profiles()
         for side, player in ipairs(players) do
             if GAMESTATE:IsHumanPlayer(player) then
                 local ok, name = pcall(profile, player)
+                local checked, reason = pcall(play_rejection, player)
                 list[#list + 1] = '{"side":'
                     .. tostring(side)
                     .. ',"profile":'
                     .. quote(ok and name or "")
+                    .. ',"skip_reason":'
+                    .. quote(checked and (reason or "") or "capture_error")
                     .. "}"
             end
         end
@@ -327,6 +345,16 @@ local messages = {
     unlinked = { "Not submitted - profile not linked", "#FFD078" },
     ambiguous = { "Not submitted - duplicate profile", "#FFD078" },
     skipped = { "Not submitted - unsupported play", "#FFD078" },
+    skipped_rate = { "Not submitted - music rate changed", "#FFD078" },
+    skipped_judgement = { "Not submitted - altered judgement", "#FFD078" },
+    skipped_notes = { "Not submitted - note-changing modifiers", "#FFD078" },
+    skipped_mode = { "Not submitted - unsupported game mode", "#FFD078" },
+    skipped_autoplay = { "Not submitted - autoplay used", "#FFD078" },
+    skipped_chart = { "Not submitted - unsupported chart", "#FFD078" },
+    skipped_profile_changed = { "Not submitted - profile changed during play", "#FFD078" },
+    skipped_disqualified = { "Not submitted - game marked play disqualified", "#FFD078" },
+    skipped_capture_error = { "Not submitted - could not verify play settings", "#FFD078" },
+    skipped_score = { "Not submitted - invalid score", "#FFD078" },
     unmatched = { "Not submitted - chart not found", "#FFD078" },
     expired = { "Not submitted - account settings changed", "#FFD078" },
     discarded = { "Pending score discarded", "#ACBCD0" },
@@ -500,14 +528,11 @@ local function tick(delta)
         lastScreen = screen
         if capture_results then
             for side, c in pairs(active) do
-                if c.eligible then
-                    local ok, eligible = pcall(function()
-                        local name, guid = profile(c.player)
-                        return name == c.profile and guid == c.guid and eligible_play(c.player)
-                    end)
-                    c.eligible = ok and eligible
+                if not c.skip_reason then
+                    local ok, reason = pcall(attempt_rejection, c)
+                    c.skip_reason = ok and reason or (not ok and "capture_error" or nil)
                     if not ok then
-                        report_error("P" .. tostring(side) .. ": " .. tostring(eligible))
+                        report_error("P" .. tostring(side) .. ": " .. tostring(reason))
                     end
                 end
             end
@@ -595,7 +620,7 @@ return Def.ActorFrame({
                 local updated, update_error = pcall(tick, delta)
                 if not updated then
                     for _, c in pairs(active) do
-                        c.eligible = false
+                        c.skip_reason = c.skip_reason or "capture_error"
                     end
 
                     pcall(update_notifications, "", 0)

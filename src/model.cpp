@@ -80,7 +80,8 @@ Result result_from_json(const Object& data) {
         str(data, L"plate"),
         str(data, L"profile"),
         number(data, L"side"),
-        flag(data, L"ambiguous")};
+        flag(data, L"ambiguous"),
+        str(data, L"skip_reason")};
 }
 
 Object result_json(const Result& result) {
@@ -96,6 +97,10 @@ Object result_json(const Result& result) {
     put(data, L"profile", result.profile);
     put(data, L"side", result.side);
     put(data, L"ambiguous", result.ambiguous);
+    if (!result.skip_reason.empty()) {
+        put(data, L"skip_reason", result.skip_reason);
+    }
+
     if (!result.plate.empty() && !result.broken) {
         put(data, L"plate", result.plate);
     }

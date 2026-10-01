@@ -78,7 +78,7 @@ GAMESTATE = {
                 return "PlayerController_Human"
             end,
             GetPlayerOptionsString = function()
-                return invalid and person(pn) == 1 and "EasyJudgement" or "NormalJudgement"
+                return invalid and person(pn) == 1 and "EasyJudgement" or "m550, BgaOff"
             end,
         }
     end,
