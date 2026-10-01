@@ -516,6 +516,15 @@ check(
     message(1) == "PB submitted" and message(2) == "Check your API key in the companion",
     "each result card receives only its own outcome"
 )
+check(
+    feedback_game.cards[1].values.xy[2] == 110 and feedback_game.cards[2].values.xy[2] == 110,
+    "result cards sit beneath the usercards, above the score area"
+)
+feedback_game:tick("ScreenEvaluation", 6)
+check(
+    feedback_game.cards[1].values.diffusealpha[1] == 0,
+    "unchanged feedback fades out after five seconds and cannot restart the timer"
+)
 feedback_game.feedback = "PIUCOMPANION 1\nold-event\tretry\n"
 feedback_game:tick("ScreenEvaluation", 0.5)
 check(message(1) == "PB submitted", "unrelated or delayed feedback cannot replace the current outcome")
@@ -536,6 +545,8 @@ check(
 feedback_game.feedback = "PIUCOMPANION 1\n" .. feedback_game.result:match('"id":"(.-)"') .. "\tretry\n"
 feedback_game:tick("ScreenEvaluation", 0.5)
 check(message(1) == "Saved - will retry", "late feedback replaces the unavailable state")
+feedback_game:tick("ScreenEvaluation", 6)
+check(feedback_game.cards[1].values.diffusealpha[1] == 0, "retry notices also expire")
 local display_failure = fixture({ file_error = true })
 display_failure:tick("ScreenGameplay")
 display_failure:tick("ScreenEvaluation")

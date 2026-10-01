@@ -7,6 +7,7 @@ local count, active, lastScreen, heartbeat, warned = 0, {}, "", 0, false
 local players = { "PlayerNumber_P1", "PlayerNumber_P2" }
 local profiles = "[]"
 local tick_error
+local feedback_state = "starting"
 
 local function quote(value)
     local text = tostring(value or "")
@@ -41,7 +42,12 @@ local function publish()
         completed_result = nil
     end
 
-    local text = '{"current":' .. current .. ',"players":' .. profiles
+    local text = '{"current":'
+        .. current
+        .. ',"players":'
+        .. profiles
+        .. ',"feedback":'
+        .. quote(feedback_state)
     if completed_result then
         text = text .. ',"results":' .. completed_result .. ',"completed":' .. tostring(completed_at)
     end
@@ -332,19 +338,20 @@ local notices, cards = {}, {}
 local feedback_elapsed, result_started = 0, 0
 
 local function read_feedback()
-    FILEMAN:FlushDirCache("/Save/PiuCompanion/")
-    local file = RageFileUtil.CreateRageFile()
-    local ok, text = pcall(function()
-        if not file:Open(feedback_path, 1) or file:GetFileSize() > 512 then
-            return nil
-        end
-
-        return file:Read()
-    end)
-    file:destroy()
-    if not ok or type(text) ~= "string" or text:sub(1, #"PIUCOMPANION 1\n") ~= "PIUCOMPANION 1\n" then
+    -- Use the same reader as xsanity's bundled theme loader. RageFile:Open is song-only.
+    local size = FILEMAN:GetFileSizeBytes(feedback_path)
+    if size < 0 or size > 512 then
+        feedback_state = "unreadable"
         return
     end
+
+    local text = lua.ReadFile(feedback_path, 9257)
+    if type(text) ~= "string" or #text > 512 or text:sub(1, #"PIUCOMPANION 1\n") ~= "PIUCOMPANION 1\n" then
+        feedback_state = "invalid"
+        return
+    end
+
+    feedback_state = "ready"
 
     local found = {}
     for id, code in text:gmatch("([%w_-]+)\t([a-z_]+)\n") do
@@ -354,7 +361,11 @@ local function read_feedback()
     end
     for _, notice in pairs(notices) do
         if notice.id and found[notice.id] then
-            notice.code = found[notice.id]
+            local code = found[notice.id]
+            if code ~= notice.code and not (code == "checking" and notice.code == "unavailable") then
+                notice.code = code
+                notice.changed_at = GetTimeSinceStart()
+            end
             notice.received = true
         end
     end
@@ -366,8 +377,13 @@ local function update_notifications(screen, delta)
     end
 
     feedback_elapsed = feedback_elapsed + delta
-    if screen == "ScreenEvaluation" and feedback_elapsed >= 0.5 then
-        pcall(read_feedback)
+    if
+        (screen == "ScreenEvaluation" and feedback_elapsed >= 0.5)
+        or (feedback_state ~= "ready" and feedback_elapsed >= 2)
+    then
+        if not pcall(read_feedback) then
+            feedback_state = "read_error"
+        end
         feedback_elapsed = 0
     end
     for side, card in pairs(cards) do
@@ -379,9 +395,18 @@ local function update_notifications(screen, delta)
             and GetTimeSinceStart() - result_started >= 8
         then
             notice.code = "unavailable"
+            notice.changed_at = GetTimeSinceStart()
         end
 
         local code = notice and notice.code or nil
+        local duration = (code == "checking" or code == "sending") and 8 or 5
+        if notice and GetTimeSinceStart() - (notice.changed_at or result_started) >= duration then
+            code = nil
+        end
+
+        if screen ~= "ScreenEvaluation" then
+            card.actor:visible(false)
+        end
         if card.code ~= code then
             card.actor:stoptweening()
             if code then
@@ -392,7 +417,7 @@ local function update_notifications(screen, delta)
                     card.actor:visible(true):diffusealpha(0):linear(0.18):diffusealpha(1)
                 end
             else
-                card.actor:visible(false)
+                card.actor:linear(0.25):diffusealpha(0)
             end
             card.code = code
         end
@@ -410,7 +435,7 @@ local function notification_actors()
         local player_side = side
         frame[#frame + 1] = Def.ActorFrame({
             InitCommand = function(self)
-                self:xy(SCREEN_WIDTH * (player_side == 1 and 0.25 or 0.75), SCREEN_HEIGHT - 48):visible(false)
+                self:xy(SCREEN_WIDTH * (player_side == 1 and 0.25 or 0.75), 110):visible(false)
                 cards[player_side] = { actor = self }
             end,
             Def.Quad({

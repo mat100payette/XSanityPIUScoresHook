@@ -15,24 +15,23 @@ return function(env, read)
             end,
         })
     end
-    env.FILEMAN = { FlushDirCache = function() end }
+    -- Match the inspected game API: no FlushDirCache or RageFile:GetFileSize bindings.
+    env.FILEMAN = {
+        GetFileSizeBytes = function(_, path)
+            assert(path == "/Save/PiuCompanion/status.txt")
+            local text = read()
+            return text and #text or -1
+        end,
+    }
+    env.lua = {
+        ReadFile = function(path, mode)
+            assert(path == "/Save/PiuCompanion/status.txt" and mode == 9257)
+            return read()
+        end,
+    }
     env.RageFileUtil = {
         CreateRageFile = function()
-            local text
-            return {
-                Open = function(_, path, mode)
-                    assert(path == "/Save/PiuCompanion/status.txt" and mode == 1)
-                    text = read()
-                    return text ~= nil
-                end,
-                GetFileSize = function()
-                    return #text
-                end,
-                Read = function()
-                    return text
-                end,
-                destroy = function() end,
-            }
+            error("RageFile is restricted to song folders")
         end,
     }
     local methods = {}

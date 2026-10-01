@@ -29,7 +29,7 @@ Profile/key changes are blocked while that account has pending uploads. Let them
 
 ## Result notifications
 
-With syncing enabled, each player's results screen shows a small PIU Scores status card: submitted, website PB already up to date, saved for retry, or a specific reason it could not sync. Cards follow the current play and disappear when you leave the results screen.
+With syncing enabled, each player's results screen shows a small PIU Scores status card: submitted, website PB already up to date, saved for retry, or a specific reason it could not sync. Cards appear beneath each usercard, follow the current play, and fade out after five seconds. A new outcome can briefly show again; leaving the results screen hides them immediately.
 
 **PB submitted** means PIU Scores confirmed the upload. **Upload unconfirmed** means its response was lost; check the website before taking action. **Sync status unavailable** means the game has no feedback from the companion and cannot confirm whether the score was saved.
 
